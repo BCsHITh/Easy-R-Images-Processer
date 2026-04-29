@@ -1,11 +1,14 @@
 """
 DICOM 转 NIfTI 转换器
+支持保持原始文件夹结构
 """
 import subprocess
 import shutil
+import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 
+logger = logging.getLogger("ERP")
 
 class DICOMConverter:
     """DICOM 到 NIfTI 转换器"""
@@ -52,113 +55,204 @@ class DICOMConverter:
                 "请在设置中配置 dcm2niix 路径，或将 dcm2niix.exe 放入 tools/ 目录"
             )
 
+    def _find_dicom_series(self, dicom_dir: Path) -> List[Path]:
+        """
+        递归查找所有包含 DICOM 文件的目录
+
+        Args:
+            dicom_dir: 根目录
+
+        Returns:
+            包含 DICOM 文件的目录列表
+        """
+        dicom_dirs = []
+
+        # 检查当前目录是否包含 DICOM 文件
+        dicom_extensions = {'.dcm', '.dicom', '.DCM', '.DICOM'}
+        has_dicom = any(
+            f.suffix.upper() in dicom_extensions or 'DICOMDIR' in f.name
+            for f in dicom_dir.iterdir() if f.is_file()
+        )
+
+        if has_dicom:
+            # 当前目录就是 DICOM 序列目录
+            dicom_dirs.append(dicom_dir)
+        else:
+            # 递归检查子目录
+            for subdir in dicom_dir.iterdir():
+                if subdir.is_dir() and not subdir.name.startswith('.'):
+                    dicom_dirs.extend(self._find_dicom_series(subdir))
+
+        return dicom_dirs
+
     def convert(
-            self,
-            dicom_dir: str,
-            output_dir: str,
-            compression: bool = True,
-            filename_pattern: str = "%p_%s",
-            progress_callback: Optional[Callable[[int, str], None]] = None
+        self,
+        dicom_dir: str,
+        output_dir: str,
+        compression: bool = True,
+        filename_pattern: str = "%p_%s",
+        preserve_structure: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> dict:
         """
         转换 DICOM 到 NIfTI
 
         Args:
-            dicom_dir: DICOM 文件目录
-            output_dir: 输出目录
+            dicom_dir: DICOM 文件目录（根目录）
+            output_dir: 输出根目录
             compression: 是否压缩输出文件
             filename_pattern: 文件名模式
+            preserve_structure: 是否保持原始文件夹结构
             progress_callback: 进度回调函数 (value, text)
 
         Returns:
             dict: 转换结果信息
-
-        Raises:
-            FileNotFoundError: dcm2niix 未找到
-            RuntimeError: 转换失败
         """
         if progress_callback:
-            progress_callback(0, "准备转换...")
+            progress_callback(0, "扫描 DICOM 目录...")
 
-        # 验证输入目录
         dicom_path = Path(dicom_dir)
         if not dicom_path.exists():
             raise FileNotFoundError(f"DICOM 目录不存在：{dicom_dir}")
 
-        # 创建输出目录
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
+        # 查找所有 DICOM 序列目录
         if progress_callback:
-            progress_callback(10, "查找 dcm2niix...")
+            progress_callback(10, "查找 DICOM 序列...")
+
+        if preserve_structure:
+            # 保持结构模式：查找所有子目录中的 DICOM 序列
+            series_dirs = self._find_dicom_series(dicom_path)
+        else:
+            # 简单模式：整个目录作为一个序列
+            series_dirs = [dicom_path]
+
+        if not series_dirs:
+            raise FileNotFoundError(f"在 {dicom_dir} 中未找到 DICOM 文件")
+
+        total_series = len(series_dirs)
+        self.logger.info(f"找到 {total_series} 个 DICOM 序列")
+
+        # 转换结果统计
+        results = {
+            "success": True,
+            "total_series": total_series,
+            "converted_series": 0,
+            "failed_series": 0,
+            "files": [],
+            "output_dir": str(output_path),
+            "details": []
+        }
+
+        # 逐个转换每个序列
+        for idx, series_dir in enumerate(series_dirs):
+            try:
+                if progress_callback:
+                    progress = 20 + int(80 * idx / total_series)
+                    progress_callback(progress, f"转换序列 {idx + 1}/{total_series}...")
+
+                # 计算输出路径（保持相对结构）
+                if preserve_structure:
+                    relative_path = series_dir.relative_to(dicom_path)
+                    series_output_dir = output_path / relative_path
+                else:
+                    series_output_dir = output_path
+
+                # 转换单个序列
+                series_result = self._convert_single_series(
+                    dicom_dir=series_dir,
+                    output_dir=series_output_dir,
+                    compression=compression,
+                    filename_pattern=filename_pattern
+                )
+
+                results["converted_series"] += 1
+                results["files"].extend(series_result["files"])
+                results["details"].append({
+                    "source": str(series_dir),
+                    "output": str(series_output_dir),
+                    "files": series_result["files"],
+                    "success": True
+                })
+
+            except Exception as e:
+                results["failed_series"] += 1
+                results["details"].append({
+                    "source": str(series_dir),
+                    "error": str(e),
+                    "success": False
+                })
+                self.logger.error(f"转换失败 {series_dir}: {e}")
+
+        # 最终统计
+        if results["failed_series"] > 0:
+            results["success"] = False
+
+        if progress_callback:
+            progress_callback(100, f"完成：{results['converted_series']}/{total_series} 序列")
+
+        return results
+
+    def _convert_single_series(
+        self,
+        dicom_dir: Path,
+        output_dir: Path,
+        compression: bool = True,
+        filename_pattern: str = "%p_%s"
+    ) -> dict:
+        """
+        转换单个 DICOM 序列
+
+        Args:
+            dicom_dir: DICOM 序列目录
+            output_dir: 输出目录
+            compression: 是否压缩
+            filename_pattern: 文件名模式
+
+        Returns:
+            dict: 转换结果
+        """
+        # 创建输出目录
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 构建命令
         cmd = [
             self.dcm2niix_path,
-            "-o", str(output_path),
+            "-o", str(output_dir),
             "-f", filename_pattern,
         ]
 
         if compression:
-            cmd.append("-z")
-            cmd.append("y")  # 压缩为 .nii.gz
+            cmd.extend(["-z", "y"])
         else:
-            cmd.append("-z")
-            cmd.append("n")  # 不压缩
+            cmd.extend(["-z", "n"])
 
-        # 添加源目录
-        cmd.append(str(dicom_path))
-
-        if progress_callback:
-            progress_callback(20, "执行转换...")
+        cmd.append(str(dicom_dir))
 
         # 执行转换
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
-            )
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
 
-            # 读取输出
-            stdout_lines = []
-            while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None:
-                    break
-                if line:
-                    stdout_lines.append(line.strip())
-                    if progress_callback:
-                        # 简单解析进度
-                        if "Convert" in line:
-                            progress_callback(50, "转换中...")
-                        elif "Write" in line:
-                            progress_callback(80, "写入文件...")
+        stdout, stderr = process.communicate()
 
-            # 等待完成
-            stderr = process.stderr.read()
-            return_code = process.wait()
+        if process.returncode != 0:
+            raise RuntimeError(f"dcm2niix 错误：{stderr}")
 
-            if return_code != 0:
-                raise RuntimeError(f"dcm2niix 错误：{stderr}")
+        # 查找生成的文件
+        nii_files = list(output_dir.glob("*.nii*"))
 
-            if progress_callback:
-                progress_callback(100, "转换完成")
-
-            # 查找生成的文件
-            nii_files = list(output_path.glob("*.nii*"))
-
-            return {
-                "success": True,
-                "output_dir": str(output_path),
-                "files": [str(f) for f in nii_files],
-                "file_count": len(nii_files),
-                "log": stdout_lines
-            }
-
-        except Exception as e:
-            raise RuntimeError(f"转换过程出错：{str(e)}")
+        return {
+            "success": True,
+            "output_dir": str(output_dir),
+            "files": [str(f) for f in nii_files],
+            "file_count": len(nii_files)
+        }
 
     def set_path(self, path: str):
         """设置 dcm2niix 路径"""

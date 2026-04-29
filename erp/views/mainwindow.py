@@ -74,6 +74,12 @@ class MainWindow(QMainWindow):
         self.compress_check.setChecked(True)
         convert_layout.addRow("", self.compress_check)
 
+        # 保持结构选项
+        self.preserve_structure_check = QCheckBox("保持原始文件夹结构")
+        self.preserve_structure_check.setChecked(True)
+        self.preserve_structure_check.setToolTip("按原 DICOM 目录结构组织输出文件")
+        convert_layout.addRow("", self.preserve_structure_check)
+
         # 转换按钮
         self.convert_btn = QPushButton("开始转换")
         self.convert_btn.clicked.connect(self._start_conversion)
@@ -255,6 +261,7 @@ class MainWindow(QMainWindow):
                 dicom_dir=dicom_dir,
                 output_dir=output_dir,
                 compression=self.compress_check.isChecked(),
+                preserve_structure=self.preserve_structure_check.isChecked(),
                 progress_callback=progress_callback
             )
 
@@ -289,18 +296,37 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setEnabled(False)
 
         if result.get("success"):
-            file_count = result.get("file_count", 0)
-            self._log(f"✅ 转换成功！生成 {file_count} 个文件")
+            converted = result.get("converted_series", 0)
+            total = result.get("total_series", 0)
+            file_count = len(result.get("files", []))
+
+            self._log(f"✅ 转换成功！")
+            self._log(f"   序列：{converted}/{total}")
+            self._log(f"   文件：{file_count} 个")
             self._log(f"输出目录：{result.get('output_dir')}")
 
             QMessageBox.information(
                 self,
                 "转换成功",
-                f"成功转换 {file_count} 个文件\n\n输出目录：\n{result.get('output_dir')}"
+                f"成功转换 {converted}/{total} 个序列\n"
+                f"生成 {file_count} 个文件\n\n"
+                f"输出目录：\n{result.get('output_dir')}"
             )
         else:
-            self._log("❌ 转换失败")
-            QMessageBox.critical(self, "错误", "转换失败")
+            converted = result.get("converted_series", 0)
+            failed = result.get("failed_series", 0)
+
+            self._log(f"⚠️ 部分转换失败")
+            self._log(f"   成功：{converted} 序列")
+            self._log(f"   失败：{failed} 序列")
+
+            QMessageBox.warning(
+                self,
+                "部分转换失败",
+                f"完成 {converted} 个序列\n"
+                f"失败 {failed} 个序列\n\n"
+                f"查看日志获取详细信息"
+            )
 
     def _on_error(self, error_msg):
         """发生错误"""
