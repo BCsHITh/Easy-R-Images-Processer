@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+.conda/
+
+# Qt
+*.ui~ 
+erp/resources/resources_rc.py
+
+# Config
+config/settings.json
+
+# Logs & Data
+logs/*.log
+data/*
+!data/.gitkeep
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
