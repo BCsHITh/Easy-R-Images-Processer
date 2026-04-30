@@ -11,13 +11,13 @@ from erp.utils.logger import setup_logger
 
 
 def main():
-    # 1. 初始化配置管理器
+    # 1. 初始化配置
     config = ConfigManager()
 
     # 2. 设置日志
     setup_logger(config.log_file)
 
-    # 3. 启用高 DPI 支持
+    # 3. 高 DPI 支持
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -27,11 +27,31 @@ def main():
     app.setApplicationName("Easy-R-Images-Processer")
     app.setOrganizationName("Easy-R-Lab")
 
-    # 5. 创建并显示主窗口
+    # 5. 设置样式
+    app.setStyleSheet("""
+        QMainWindow {
+            background-color: #1e1e1e;
+        }
+        QGroupBox {
+            font-weight: bold;
+            border: 1px solid #3e3e3e;
+            border-radius: 4px;
+            margin-top: 10px;
+            padding-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px;
+            color: #4a9eff;
+        }
+    """)
+
+    # 6. 创建主窗口
     window = MainWindow(config)
     window.show()
 
-    # 6. 运行应用
+    # 7. 运行
     sys.exit(app.exec())
 
 

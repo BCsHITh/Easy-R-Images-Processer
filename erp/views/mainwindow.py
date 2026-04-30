@@ -2,378 +2,225 @@
 主窗口
 """
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QFileDialog,
-    QProgressBar, QGroupBox, QFormLayout,
-    QMessageBox, QCheckBox, QStatusBar, QMenuBar,
-    QMenu, QTextEdit, QSplitter
+    QMainWindow, QWidget, QHBoxLayout, QStackedWidget,
+    QMenuBar, QMenu, QStatusBar, QLabel, QFrame,
+    QPushButton, QVBoxLayout, QListWidget, QListWidgetItem
 )
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt, QDateTime
-from pathlib import Path
-import logging
+from PySide6.QtCore import Qt, QSize
 
-from erp.core.converter import DICOMConverter
-from erp.utils.workers import WorkerThread
-
+from erp.views.panels.dicom_convert import DicomConvertPanel
+from erp.views.panels.file_manager import FileManagerPanel
+from erp.views.panels.structural import StructuralPanel
+from erp.views.panels.functional import FunctionalPanel
+from erp.views.panels.transform import TransformPanel
 
 class MainWindow(QMainWindow):
-    """主窗口类"""
+    """主窗口"""
 
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.logger = logging.getLogger("ERP")
-        self.converter = None
-        self.current_worker = None
+        self.current_panel = None
 
         self._init_ui()
         self._init_menu()
         self._load_config()
 
-        self.logger.info("主窗口初始化完成")
-
     def _init_ui(self):
-        """初始化用户界面"""
+        """初始化界面"""
         self.setWindowTitle("Easy-R-Images-Processer")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1200, 800)
 
         # 中央控件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # === DICOM 转换区域 ===
-        convert_group = QGroupBox("DICOM 转 NIfTI")
-        convert_layout = QFormLayout()
+        # 左侧导航栏
+        self.nav_panel = self._create_nav_panel()
+        main_layout.addWidget(self.nav_panel)
 
-        # DICOM 目录
-        self.dicom_dir_edit = QLineEdit()
-        self.dicom_dir_edit.setPlaceholderText("选择 DICOM 文件目录...")
-        self.dicom_dir_btn = QPushButton("浏览...")
-        self.dicom_dir_btn.clicked.connect(self._select_dicom_dir)
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.VLine)
+        line.setStyleSheet("background-color: #3e3e3e;")
+        main_layout.addWidget(line)
 
-        dicom_dir_layout = QHBoxLayout()
-        dicom_dir_layout.addWidget(self.dicom_dir_edit)
-        dicom_dir_layout.addWidget(self.dicom_dir_btn)
-        convert_layout.addRow("DICOM 目录:", dicom_dir_layout)
+        # 右侧内容区
+        self.content_stack = QStackedWidget()
+        main_layout.addWidget(self.content_stack)
 
-        # 输出目录
-        self.output_dir_edit = QLineEdit()
-        self.output_dir_edit.setPlaceholderText("选择输出目录...")
-        self.output_dir_btn = QPushButton("浏览...")
-        self.output_dir_btn.clicked.connect(self._select_output_dir)
+        # 创建功能面板
+        self._create_panels()
 
-        output_dir_layout = QHBoxLayout()
-        output_dir_layout.addWidget(self.output_dir_edit)
-        output_dir_layout.addWidget(self.output_dir_btn)
-        convert_layout.addRow("输出目录:", output_dir_layout)
+    def _create_nav_panel(self):
+        """创建导航面板"""
+        widget = QWidget()
+        widget.setMaximumWidth(200)
+        widget.setStyleSheet("""
+            QWidget {
+                background-color: #252526;
+            }
+        """)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 20, 10, 10)
+        layout.setSpacing(5)
 
-        # 压缩选项
-        self.compress_check = QCheckBox("压缩输出文件 (.nii.gz)")
-        self.compress_check.setChecked(True)
-        convert_layout.addRow("", self.compress_check)
+        # 标题
+        title = QLabel("Easy-R")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #4a9eff; padding: 10px;")
+        layout.addWidget(title)
 
-        # 保持结构选项
-        self.preserve_structure_check = QCheckBox("保持原始文件夹结构")
-        self.preserve_structure_check.setChecked(True)
-        self.preserve_structure_check.setToolTip("按原 DICOM 目录结构组织输出文件")
-        convert_layout.addRow("", self.preserve_structure_check)
+        # 导航列表
+        self.nav_list = QListWidget()
+        self.nav_list.setStyleSheet("""
+            QListWidget {
+                background-color: #252526;
+                color: #d4d4d4;
+                border: none;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 12px 10px;
+                border-radius: 4px;
+                margin: 2px 0;
+            }
+            QListWidget::item:hover {
+                background-color: #3e3e3e;
+            }
+            QListWidget::item:selected {
+                background-color: #4a9eff;
+                color: white;
+            }
+        """)
 
-        # 转换按钮
-        self.convert_btn = QPushButton("开始转换")
-        self.convert_btn.clicked.connect(self._start_conversion)
-        self.cancel_btn = QPushButton("取消")
-        self.cancel_btn.clicked.connect(self._cancel_conversion)
-        self.cancel_btn.setEnabled(False)
+        nav_items = [
+            "1. DICOM 转换",
+            "2. 文件管理",
+            "3. 结构像处理",
+            "4. 功能像处理",
+            "5. 变换与合并"
+        ]
 
-        btn_layout = QHBoxLayout()
-        btn_layout.addWidget(self.convert_btn)
-        btn_layout.addWidget(self.cancel_btn)
-        convert_layout.addRow("", btn_layout)
+        for item in nav_items:
+            list_item = QListWidgetItem(item)
+            list_item.setSizeHint(QSize(180, 40))
+            self.nav_list.addItem(list_item)
 
-        convert_group.setLayout(convert_layout)
-        main_layout.addWidget(convert_group)
+        self.nav_list.currentRowChanged.connect(self._on_nav_changed)
+        layout.addWidget(self.nav_list)
 
-        # === 进度区域 ===
-        progress_group = QGroupBox("转换进度")
-        progress_layout = QVBoxLayout()
+        layout.addStretch()
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_label = QLabel("就绪")
+        # 版本信息
+        from erp import __version__
+        version_label = QLabel(f"v{__version__}")
+        version_label.setStyleSheet("color: #666; font-size: 11px;")
+        version_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(version_label)
 
-        progress_layout.addWidget(self.progress_bar)
-        progress_layout.addWidget(self.progress_label)
-        progress_group.setLayout(progress_layout)
-        main_layout.addWidget(progress_group)
+        return widget
 
-        # === 日志区域 ===
-        log_group = QGroupBox("日志")
-        log_layout = QVBoxLayout()
+    def _create_panels(self):
+        """创建功能面板"""
+        self.dicom_panel = DicomConvertPanel(self.config)
+        self.file_panel = FileManagerPanel(self.config)
+        self.structural_panel = StructuralPanel(self.config)
+        self.functional_panel = FunctionalPanel(self.config)
+        self.transform_panel = TransformPanel(self.config)
 
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(200)
+        self.content_stack.addWidget(self.dicom_panel)
+        self.content_stack.addWidget(self.file_panel)
+        self.content_stack.addWidget(self.structural_panel)
+        self.content_stack.addWidget(self.functional_panel)
+        self.content_stack.addWidget(self.transform_panel)
 
-        log_layout.addWidget(self.log_text)
-        log_group.setLayout(log_layout)
-        main_layout.addWidget(log_group)
+    def _on_nav_changed(self, index):
+        """导航切换"""
+        self.content_stack.setCurrentIndex(index)
 
-        # 状态栏
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("就绪")
+        # 更新导航项样式
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            if i == index:
+                item.setSelected(True)
+            else:
+                item.setSelected(False)
 
     def _init_menu(self):
         """初始化菜单栏"""
         menubar = self.menuBar()
 
         # 文件菜单
-        file_menu = menubar.addMenu("文件(&F)")
+        file_menu = menubar.addMenu("文件 (&F)")
 
-        # 设置 dcm2niix 路径
         set_dcm2niix_action = QAction("设置 dcm2niix 路径...", self)
         set_dcm2niix_action.triggered.connect(self._set_dcm2niix_path)
         file_menu.addAction(set_dcm2niix_action)
 
         file_menu.addSeparator()
 
-        # 退出
         exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # 帮助菜单
-        help_menu = menubar.addMenu("帮助(&H)")
+        # 工具菜单
+        tool_menu = menubar.addMenu("工具 (&T)")
 
-        # 关于
+        clear_config_action = QAction("重置配置", self)
+        clear_config_action.triggered.connect(self._reset_config)
+        tool_menu.addAction(clear_config_action)
+
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助 (&H)")
+
         about_action = QAction("关于", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
     def _load_config(self):
         """加载配置"""
-        # 加载 dcm2niix 路径
-        dcm2niix_path = self.config.dcm2niix_path
-        if dcm2niix_path:
-            try:
-                self.converter = DICOMConverter(dcm2niix_path)
-                self._log(f"dcm2niix 路径：{dcm2niix_path}")
-            except FileNotFoundError as e:
-                self._log(f"⚠️ {e}")
-                QMessageBox.warning(
-                    self,
-                    "dcm2niix 未找到",
-                    str(e) + "\n\n请在 文件 → 设置 dcm2niix 路径 中配置"
-                )
-        else:
-            self._log("⚠️ 未配置 dcm2niix 路径")
-
-        # 加载上次工作目录
-        last_dir = self.config.last_work_dir
-        if last_dir:
-            self.dicom_dir_edit.setText(last_dir)
-            self.output_dir_edit.setText(last_dir)
-
-    def _select_dicom_dir(self):
-        """选择 DICOM 目录"""
-        last_dir = self.config.last_work_dir or ""
-        dir_path = QFileDialog.getExistingDirectory(
-            self,
-            "选择 DICOM 目录",
-            last_dir
-        )
-
-        if dir_path:
-            self.dicom_dir_edit.setText(dir_path)
-            self.config.last_work_dir = dir_path
-
-            # 如果没有设置输出目录，默认输出到 DICOM 目录的上一级
-            if not self.output_dir_edit.text():
-                output_dir = str(Path(dir_path).parent / "nii_output")
-                self.output_dir_edit.setText(output_dir)
-
-    def _select_output_dir(self):
-        """选择输出目录"""
-        last_dir = self.config.last_work_dir or ""
-        dir_path = QFileDialog.getExistingDirectory(
-            self,
-            "选择输出目录",
-            last_dir
-        )
-
-        if dir_path:
-            self.output_dir_edit.setText(dir_path)
+        if self.config.dcm2niix_path:
+            self.dicom_panel.converter = None  # 会在首次转换时初始化
 
     def _set_dcm2niix_path(self):
         """设置 dcm2niix 路径"""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 dcm2niix 可执行文件",
-            "",
+            self, "选择 dcm2niix 可执行文件", "",
             "Executable Files (*.exe);;All Files (*)"
         )
 
         if file_path:
-            try:
-                self.converter = DICOMConverter(file_path)
-                self.config.dcm2niix_path = file_path
-                self._log(f"✅ dcm2niix 路径已设置：{file_path}")
-                QMessageBox.information(
-                    self,
-                    "成功",
-                    f"dcm2niix 路径已设置：\n{file_path}"
-                )
-            except FileNotFoundError as e:
-                QMessageBox.critical(self, "错误", str(e))
+            self.config.dcm2niix_path = file_path
+            QMessageBox.information(self, "成功", f"dcm2niix 路径已设置")
 
-    def _start_conversion(self):
-        """开始转换"""
-        # 验证输入
-        dicom_dir = self.dicom_dir_edit.text().strip()
-        output_dir = self.output_dir_edit.text().strip()
+    def _reset_config(self):
+        """重置配置"""
+        from PySide6.QtWidgets import QMessageBox
 
-        if not dicom_dir:
-            QMessageBox.warning(self, "警告", "请选择 DICOM 目录")
-            return
+        reply = QMessageBox.question(
+            self, "确认", "确定要重置所有配置吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
 
-        if not output_dir:
-            QMessageBox.warning(self, "警告", "请选择输出目录")
-            return
-
-        if not self.converter:
-            QMessageBox.warning(
-                self,
-                "警告",
-                "dcm2niix 未配置\n\n请在 文件 → 设置 dcm2niix 路径 中配置"
-            )
-            return
-
-        # 禁用转换按钮，启用取消按钮
-        self.convert_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(True)
-        self.progress_bar.setValue(0)
-
-        # 创建转换任务
-        def convert_task(progress_callback=None):
-            return self.converter.convert(
-                dicom_dir=dicom_dir,
-                output_dir=output_dir,
-                compression=self.compress_check.isChecked(),
-                preserve_structure=self.preserve_structure_check.isChecked(),
-                progress_callback=progress_callback
-            )
-
-        # 创建工作线程
-        self.current_worker = WorkerThread(convert_task)
-        self.current_worker.progress.connect(self._on_progress)
-        self.current_worker.finished.connect(self._on_finished)
-        self.current_worker.error.connect(self._on_error)
-        self.current_worker.log.connect(self._log)
-
-        # 启动线程
-        self._log(f"开始转换：{dicom_dir} → {output_dir}")
-        self.current_worker.start()
-
-    def _cancel_conversion(self):
-        """取消转换"""
-        if self.current_worker and self.current_worker.isRunning():
-            self.current_worker.cancel()
-            self._log("用户取消转换")
-            self.convert_btn.setEnabled(True)
-            self.cancel_btn.setEnabled(False)
-
-    def _on_progress(self, value, text):
-        """进度更新"""
-        self.progress_bar.setValue(value)
-        self.progress_label.setText(text)
-        self.statusBar.showMessage(text)
-
-    def _on_finished(self, result):
-        """转换完成"""
-        self.convert_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-
-        if result.get("success"):
-            converted = result.get("converted_series", 0)
-            total = result.get("total_series", 0)
-            file_count = len(result.get("files", []))
-
-            self._log(f"✅ 转换成功！")
-            self._log(f"   序列：{converted}/{total}")
-            self._log(f"   文件：{file_count} 个")
-            self._log(f"输出目录：{result.get('output_dir')}")
-
-            QMessageBox.information(
-                self,
-                "转换成功",
-                f"成功转换 {converted}/{total} 个序列\n"
-                f"生成 {file_count} 个文件\n\n"
-                f"输出目录：\n{result.get('output_dir')}"
-            )
-        else:
-            converted = result.get("converted_series", 0)
-            failed = result.get("failed_series", 0)
-
-            self._log(f"⚠️ 部分转换失败")
-            self._log(f"   成功：{converted} 序列")
-            self._log(f"   失败：{failed} 序列")
-
-            QMessageBox.warning(
-                self,
-                "部分转换失败",
-                f"完成 {converted} 个序列\n"
-                f"失败 {failed} 个序列\n\n"
-                f"查看日志获取详细信息"
-            )
-
-    def _on_error(self, error_msg):
-        """发生错误"""
-        self.convert_btn.setEnabled(True)
-        self.cancel_btn.setEnabled(False)
-        self._log(f"❌ {error_msg}")
-        QMessageBox.critical(self, "错误", error_msg)
-
-    def _log(self, message):
-        """添加日志"""
-        timestamp = QDateTime.currentDateTime().toString("HH:mm:ss")
-        log_msg = f"[{timestamp}] {message}"
-        self.log_text.append(log_msg)
-        self.logger.info(message)
+        if reply == QMessageBox.Yes:
+            self.config.settings = self.config.get_default_config()
+            self.config.save()
+            QMessageBox.information(self, "成功", "配置已重置")
 
     def _show_about(self):
-        """显示关于对话框"""
+        """显示关于"""
+        from PySide6.QtWidgets import QMessageBox
         from erp import __version__
 
         QMessageBox.about(
-            self,
-            "关于 Easy-R-Images-Processer",
+            self, "关于",
             f"<h2>Easy-R-Images-Processer</h2>"
             f"<p>版本：{__version__}</p>"
             f"<p>小鼠/兔子脑 MRI 序列管理与后处理工具</p>"
-            f"<p>功能：DICOM 转 NIfTI、影像配准、3D 重建等</p>"
         )
-
-    def closeEvent(self, event):
-        """关闭窗口事件"""
-        if self.current_worker and self.current_worker.isRunning():
-            reply = QMessageBox.question(
-                self,
-                "确认退出",
-                "转换任务正在进行中，确定要退出吗？",
-                QMessageBox.Yes | QMessageBox.No
-            )
-
-            if reply == QMessageBox.Yes:
-                self.current_worker.cancel()
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.accept()
-
-
-# 需要导入 QDateTime
-from PySide6.QtCore import QDateTime
-from pathlib import Path
