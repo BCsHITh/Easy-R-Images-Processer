@@ -1,10 +1,10 @@
 """
 医学影像预览控件（2x2 网格布局）
-参考 ITK-SNAP 风格
+支持 3D 和 4D 数据，滚轮控制切片
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGridLayout
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPixmap, QWheelEvent
+from PySide6.QtGui import QImage, QPixmap
 import numpy as np
 
 
@@ -17,8 +17,11 @@ class ImageViewer(QWidget):
         super().__init__(parent)
         self.image_data = None
         self.current_slices = [0, 0, 0]  # 轴状、冠状、矢状
+        self.current_frame = 0
         self.image_shape = (0, 0, 0)
-        self.spacing = [1.0, 1.0, 1.0]  # 体素间距 (mm)
+        self.is_4d = False
+        self.spacing = [1.0, 1.0, 1.0]
+        self.tr = 2.0
 
         self._init_ui()
 
@@ -66,6 +69,7 @@ class ImageViewer(QWidget):
         """创建视图窗口"""
         widget = QWidget()
         widget.setStyleSheet("background-color: #000; border: 1px solid #3e3e3e;")
+        widget.setFixedSize(200, 200)  # ← 添加：固定尺寸
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -73,12 +77,11 @@ class ImageViewer(QWidget):
         # 图像标签
         image_label = QLabel()
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setMinimumSize(256, 256)
+        image_label.setFixedSize(200, 200)  # ← 添加：固定尺寸
         image_label.setStyleSheet("background-color: #000;")
-
-        # 启用鼠标追踪和滚轮
         image_label.setMouseTracking(True)
         image_label.installEventFilter(self)
+
 
         # 坐标信息标签
         coord_label = QLabel("X: 0.00  Y: 0.00  Z: 0.00")
@@ -124,12 +127,11 @@ class ImageViewer(QWidget):
         return widget
 
     def eventFilter(self, obj, event):
-        """事件过滤器 - 处理滚轮和鼠标移动"""
+        """事件过滤器 - 处理滚轮"""
         from PySide6.QtCore import QEvent
-        from PySide6.QtGui import QWheelEvent, QMouseEvent
+        from PySide6.QtGui import QWheelEvent
 
         if event.type() == QEvent.Wheel:
-            # 滚轮控制切片
             if isinstance(event, QWheelEvent):
                 delta = event.angleDelta().y()
                 if delta > 0:
@@ -138,54 +140,53 @@ class ImageViewer(QWidget):
                     self._prev_slice()
                 return True
 
-        elif event.type() == QEvent.MouseMove:
-            # 鼠标移动显示坐标
-            if isinstance(event, QMouseEvent):
-                pos = event.pos()
-                label = obj
-                # 获取当前视图的切片信息
-                self._update_coord_display(label, pos)
-
         return super().eventFilter(obj, event)
 
     def _next_slice(self):
-        """下一切片"""
+        """下一切片（轴向 Z 方向）"""
         if self.image_data is None:
             return
-        # 默认控制轴状面
         self.current_slices[2] = min(self.current_slices[2] + 1, self.image_shape[2] - 1)
         self._update_all_views()
 
     def _prev_slice(self):
-        """上一切片"""
+        """上一切片（轴向 Z 方向）"""
         if self.image_data is None:
             return
         self.current_slices[2] = max(self.current_slices[2] - 1, 0)
         self._update_all_views()
 
     def load_image(self, nii_path, title=None):
-        """加载 NIfTI 图像"""
+        """加载 NIfTI 图像（支持 3D 和 4D）"""
         try:
             import nibabel as nib
 
             img = nib.load(nii_path)
-            self.image_data = img.get_fdata()
-            self.image_shape = self.image_data.shape
+            data = img.get_fdata()
+            self.image_shape = data.shape
 
             # 获取间距信息
             if img.header.get_zooms():
                 self.spacing = list(img.header.get_zooms()[:3])
+                if len(img.header.get_zooms()) >= 4:
+                    self.tr = img.header.get_zooms()[3]
 
-            # 处理 4D 数据
-            if len(self.image_data.shape) == 4:
-                self.image_data = np.mean(self.image_data, axis=3)
-                self.image_shape = self.image_data.shape
-
-            # 更新标题
-            if title:
-                self.title_label.setText(title)
+            # 判断是否是 4D 数据
+            if len(data.shape) == 4:
+                self.is_4d = True
+                self.image_data = data
+                self.current_frame = 0
+                if title:
+                    self.title_label.setText(f"{title} [4D: {data.shape[3]} 帧]")
+                else:
+                    self.title_label.setText(f"{nii_path.split('/')[-1]} [4D: {data.shape[3]} 帧]")
             else:
-                self.title_label.setText(nii_path.split("/")[-1])
+                self.is_4d = False
+                self.image_data = data
+                if title:
+                    self.title_label.setText(title)
+                else:
+                    self.title_label.setText(nii_path.split('/')[-1])
 
             # 初始化切片位置（居中）
             self.current_slices = [
@@ -198,8 +199,6 @@ class ImageViewer(QWidget):
             self._update_all_views()
             self._update_coord_display()
 
-            self.log_info(f"加载图像：{self.image_shape}, 间距：{self.spacing}")
-
         except Exception as e:
             self.title_label.setText(f"加载失败：{str(e)}")
 
@@ -208,22 +207,28 @@ class ImageViewer(QWidget):
         if self.image_data is None:
             return
 
+        # 获取当前帧的数据
+        if self.is_4d:
+            data_3d = self.image_data[:, :, :, self.current_frame]
+        else:
+            data_3d = self.image_data
+
         # 轴状面 (XY 平面，固定 Z)
         z = self.current_slices[2]
-        if z < self.image_shape[2]:
-            axial_slice = self.image_data[:, :, z]
+        if z < data_3d.shape[2]:
+            axial_slice = data_3d[:, :, z]
             self._display_slice(self.axial_widget, axial_slice, 'axial')
 
         # 冠状面 (XZ 平面，固定 Y)
         y = self.current_slices[1]
-        if y < self.image_shape[1]:
-            coronal_slice = self.image_data[:, y, :]
+        if y < data_3d.shape[1]:
+            coronal_slice = data_3d[:, y, :]
             self._display_slice(self.coronal_widget, coronal_slice, 'coronal')
 
         # 矢状面 (YZ 平面，固定 X)
         x = self.current_slices[0]
-        if x < self.image_shape[0]:
-            sagittal_slice = self.image_data[x, :, :]
+        if x < data_3d.shape[0]:
+            sagittal_slice = data_3d[x, :, :]
             self._display_slice(self.sagittal_widget, sagittal_slice, 'sagittal')
 
         # 更新坐标显示
@@ -242,52 +247,45 @@ class ImageViewer(QWidget):
             data = (data - data_min) / (data_max - data_min) * 255
         data = data.astype(np.uint8)
 
+        # 确保 C-contiguous
+        data = np.ascontiguousarray(data)
+
         # 创建 QImage
         h, w = data.shape
         image = QImage(data.data, w, h, w, QImage.Format_Grayscale8)
         pixmap = QPixmap.fromImage(image)
 
-        # 缩放适应标签
+        # ← 使用固定尺寸缩放
         viewport.image_label.setPixmap(pixmap.scaled(
-            viewport.image_label.size(),
+            viewport.image_label.size(),  # 使用标签的固定尺寸
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         ))
 
-    def _update_coord_display(self, viewport=None, mouse_pos=None):
+    def _update_coord_display(self):
         """更新坐标显示"""
         if self.image_data is None:
             return
 
-        # 计算物理坐标 (mm)
         x_mm = self.current_slices[0] * self.spacing[0]
         y_mm = self.current_slices[1] * self.spacing[1]
         z_mm = self.current_slices[2] * self.spacing[2]
 
-        # 全局坐标
-        self.coord_label.setText(f"X: {x_mm:.2f}  Y: {y_mm:.2f}  Z: {z_mm:.2f}  (mm)")
-
-        # 各视图坐标
-        if viewport:
-            if hasattr(viewport, 'view_axis'):
-                axis = viewport.view_axis
-                if axis == 0:  # Axial
-                    viewport.coord_label.setText(f"X: {x_mm:.1f}  Y: {y_mm:.1f}  Z: {z_mm:.1f}")
-                elif axis == 1:  # Coronal
-                    viewport.coord_label.setText(f"X: {x_mm:.1f}  Y: {y_mm:.1f}  Z: {z_mm:.1f}")
-                elif axis == 2:  # Sagittal
-                    viewport.coord_label.setText(f"X: {x_mm:.1f}  Y: {y_mm:.1f}  Z: {z_mm:.1f}")
+        if self.is_4d:
+            time_sec = self.current_frame * self.tr
+            self.coord_label.setText(
+                f"X: {x_mm:.2f}  Y: {y_mm:.2f}  Z: {z_mm:.2f}  (mm)  |  T: {time_sec:.2f}s"
+            )
+        else:
+            self.coord_label.setText(f"X: {x_mm:.2f}  Y: {y_mm:.2f}  Z: {z_mm:.2f}  (mm)")
 
     def clear(self):
         """清空显示"""
         self.image_data = None
+        self.is_4d = False
         self.title_label.setText("未加载图像")
         self.coord_label.setText("X: 0.00  Y: 0.00  Z: 0.00  (mm)")
 
         for viewport in [self.axial_widget, self.coronal_widget, self.sagittal_widget]:
             viewport.image_label.clear()
             viewport.coord_label.setText("X: 0.00  Y: 0.00  Z: 0.00")
-
-    def log_info(self, message):
-        """日志输出（简单打印）"""
-        print(f"[ImageViewer] {message}")

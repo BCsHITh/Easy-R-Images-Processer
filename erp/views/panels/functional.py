@@ -1,5 +1,5 @@
 """
-功能像处理面板
+功能像处理面板（支持文件管理器联动）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QCheckBox, QPushButton,
@@ -10,12 +10,14 @@ from PySide6.QtCore import Qt
 
 from erp.views.panels.base_panel import BasePanel
 
+
 class FunctionalPanel(BasePanel):
     """功能像处理面板"""
 
-    def __init__(self, config, parent=None):
+    def __init__(self, config, parent=None, with_preview=True):
         self.config = config
-        super().__init__("4. 功能像处理", parent, with_preview=True)
+        # ← 关键：正确传递 with_preview 给父类
+        super().__init__("4. 功能像处理", parent, with_preview)
 
     def _create_tool_panel(self):
         """创建工具面板"""
@@ -28,7 +30,8 @@ class FunctionalPanel(BasePanel):
         input_layout = QFormLayout()
 
         self.bold_edit = QLineEdit()
-        self.bold_edit.setPlaceholderText("选择 BOLD 序列...")
+        self.bold_edit.setPlaceholderText("从文件管理器选择或浏览...")
+        self.bold_edit.setReadOnly(True)
         bold_btn = QPushButton("浏览...")
         bold_btn.clicked.connect(lambda: self._select_file(self.bold_edit, "BOLD"))
 
@@ -38,7 +41,8 @@ class FunctionalPanel(BasePanel):
         input_layout.addRow("BOLD:", bold_layout)
 
         self.t1w_ref_edit = QLineEdit()
-        self.t1w_ref_edit.setPlaceholderText("选择 T1w 参考...")
+        self.t1w_ref_edit.setPlaceholderText("从文件管理器选择或浏览...")
+        self.t1w_ref_edit.setReadOnly(True)
         t1w_btn = QPushButton("浏览...")
         t1w_btn.clicked.connect(lambda: self._select_file(self.t1w_ref_edit, "T1w"))
 
@@ -97,6 +101,15 @@ class FunctionalPanel(BasePanel):
         )
         if file_path:
             line_edit.setText(file_path)
+
+    def set_file(self, file_path: str, file_type: str):
+        """从文件管理器设置文件"""
+        if file_type == "BOLD":
+            self.bold_edit.setText(file_path)
+            self.log(f"已设置 BOLD: {file_path}")
+        elif file_type == "T1w":
+            self.t1w_ref_edit.setText(file_path)
+            self.log(f"已设置 T1w 参考：{file_path}")
 
     def _start_processing(self):
         self.log("功能像处理功能开发中...", "WARNING")

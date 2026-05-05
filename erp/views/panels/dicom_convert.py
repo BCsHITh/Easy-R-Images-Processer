@@ -1,5 +1,5 @@
 """
-DICOM 转换面板
+DICOM 转换面板（无预览）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit, QPushButton,
@@ -51,6 +51,7 @@ class DicomConvertPanel(BasePanel):
         self.title = "1. DICOM 转 NIfTI"
         self.converter = None
         self.current_worker = None
+        self.file_manager = None  # ← 由 mainwindow 设置
         self._init_ui()
 
     def _init_ui(self):
@@ -208,9 +209,22 @@ class DicomConvertPanel(BasePanel):
         self.log(text)
 
     def _on_finished(self, result):
+        """转换完成"""
         self.convert_btn.setEnabled(True)
         if result.get("success"):
-            self.log(f"✅ 转换成功！生成 {len(result.get('files', []))} 个文件", "SUCCESS")
+            files = result.get("files", [])
+            self.log(f"✅ 转换成功！生成 {len(files)} 个文件", "SUCCESS")
+
+            # ← 关键修复：通知文件管理器注册新文件
+            if self.file_manager:
+                for f in files:
+                    try:
+                        self.file_manager.register_file_from_convert(f)
+                        self.log(f"已注册到文件管理器：{Path(f).name}", "INFO")
+                    except Exception as e:
+                        self.log(f"注册文件失败：{e}", "WARNING")
+            else:
+                self.log("⚠️ 文件管理器未连接，无法自动注册文件", "WARNING")
         else:
             self.log("❌ 转换失败", "ERROR")
 

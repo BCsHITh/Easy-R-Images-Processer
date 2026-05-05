@@ -1,5 +1,5 @@
 """
-变换与合并面板
+变换与合并面板（支持文件管理器联动）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QPushButton, QFormLayout,
@@ -14,9 +14,10 @@ from erp.views.panels.base_panel import BasePanel
 class TransformPanel(BasePanel):
     """变换与合并面板"""
 
-    def __init__(self, config, parent=None):
+    def __init__(self, config, parent=None, with_preview=True):
         self.config = config
-        super().__init__("5. 变换与合并", parent, with_preview=True)
+        # ← 关键：正确传递 with_preview 给父类
+        super().__init__("5. 变换与合并", parent, with_preview)
 
     def _create_tool_panel(self):
         """创建工具面板"""
@@ -122,3 +123,9 @@ class TransformPanel(BasePanel):
 
     def _start_transform(self):
         self.log("变换与合并功能开发中...", "WARNING")
+
+    def set_file(self, file_path: str, file_type: str):
+        """从文件管理器设置文件"""
+        if file_type in ["T1w", "T2w", "BOLD"]:
+            self.input_edit.setText(file_path)
+            self.log(f"已设置输入：{file_path}")

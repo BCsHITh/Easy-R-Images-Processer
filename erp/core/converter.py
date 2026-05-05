@@ -1,6 +1,5 @@
 """
 DICOM 转 NIfTI 转换器
-支持保持原始文件夹结构
 """
 import subprocess
 import shutil
@@ -8,7 +7,6 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional, List
 
-logger = logging.getLogger("ERP")
 
 class DICOMConverter:
     """DICOM 到 NIfTI 转换器"""
@@ -21,6 +19,7 @@ class DICOMConverter:
             dcm2niix_path: dcm2niix 可执行文件路径
         """
         self.dcm2niix_path = dcm2niix_path
+        self.logger = logging.getLogger("ERP.Converter")  # ← 初始化 logger
         self._find_dcm2niix()
 
     def _find_dcm2niix(self):
@@ -30,12 +29,14 @@ class DICOMConverter:
             exe_path = shutil.which("dcm2niix")
             if exe_path:
                 self.dcm2niix_path = exe_path
+                self.logger.info(f"在系统 PATH 中找到 dcm2niix: {exe_path}")
                 return
 
             # 尝试在 tools 目录查找
             tools_path = Path("tools/dcm2niix.exe")
             if tools_path.exists():
                 self.dcm2niix_path = str(tools_path.absolute())
+                self.logger.info(f"在 tools 目录找到 dcm2niix: {self.dcm2niix_path}")
                 return
 
             # 尝试在 Conda 环境查找
@@ -46,6 +47,7 @@ class DICOMConverter:
             for p in conda_paths:
                 if p.exists():
                     self.dcm2niix_path = str(p.absolute())
+                    self.logger.info(f"在 Conda 环境找到 dcm2niix: {self.dcm2niix_path}")
                     return
 
         # 验证路径
@@ -54,6 +56,8 @@ class DICOMConverter:
                 f"dcm2niix 未找到：{self.dcm2niix_path}\n"
                 "请在设置中配置 dcm2niix 路径，或将 dcm2niix.exe 放入 tools/ 目录"
             )
+
+        self.logger.info(f"dcm2niix 路径：{self.dcm2niix_path}")
 
     def _find_dicom_series(self, dicom_dir: Path) -> List[Path]:
         """
@@ -69,10 +73,14 @@ class DICOMConverter:
 
         # 检查当前目录是否包含 DICOM 文件
         dicom_extensions = {'.dcm', '.dicom', '.DCM', '.DICOM'}
-        has_dicom = any(
-            f.suffix.upper() in dicom_extensions or 'DICOMDIR' in f.name
-            for f in dicom_dir.iterdir() if f.is_file()
-        )
+        try:
+            has_dicom = any(
+                f.suffix.upper() in dicom_extensions or 'DICOMDIR' in f.name
+                for f in dicom_dir.iterdir() if f.is_file()
+            )
+        except PermissionError:
+            self.logger.warning(f"无权限访问目录：{dicom_dir}")
+            return dicom_dirs
 
         if has_dicom:
             # 当前目录就是 DICOM 序列目录
@@ -111,12 +119,15 @@ class DICOMConverter:
         if progress_callback:
             progress_callback(0, "扫描 DICOM 目录...")
 
+        # ← 使用 Path 统一路径处理
         dicom_path = Path(dicom_dir)
         if not dicom_path.exists():
             raise FileNotFoundError(f"DICOM 目录不存在：{dicom_dir}")
 
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+
+        self.logger.info(f"开始转换：{dicom_path} → {output_path}")
 
         # 查找所有 DICOM 序列目录
         if progress_callback:
@@ -156,7 +167,7 @@ class DICOMConverter:
                 # 计算输出路径（保持相对结构）
                 if preserve_structure:
                     relative_path = series_dir.relative_to(dicom_path)
-                    series_output_dir = output_path / relative_path
+                    series_output_dir = output_path / relative_path  # ← 使用 / 连接 Path
                 else:
                     series_output_dir = output_path
 
@@ -177,6 +188,8 @@ class DICOMConverter:
                     "success": True
                 })
 
+                self.logger.info(f"转换成功：{series_dir.name} → {len(series_result['files'])} 个文件")
+
             except Exception as e:
                 results["failed_series"] += 1
                 results["details"].append({
@@ -192,6 +205,8 @@ class DICOMConverter:
 
         if progress_callback:
             progress_callback(100, f"完成：{results['converted_series']}/{total_series} 序列")
+
+        self.logger.info(f"转换完成：成功 {results['converted_series']}/{total_series} 序列")
 
         return results
 
@@ -217,10 +232,10 @@ class DICOMConverter:
         # 创建输出目录
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 构建命令
+        # 构建命令（所有路径转为字符串）
         cmd = [
-            self.dcm2niix_path,
-            "-o", str(output_dir),
+            str(self.dcm2niix_path),  # ← 确保是字符串
+            "-o", str(output_dir),    # ← 确保是字符串
             "-f", filename_pattern,
         ]
 
@@ -229,28 +244,34 @@ class DICOMConverter:
         else:
             cmd.extend(["-z", "n"])
 
-        cmd.append(str(dicom_dir))
+        cmd.append(str(dicom_dir))  # ← 确保是字符串
+
+        self.logger.debug(f"执行命令：{' '.join(cmd)}")
 
         # 执行转换
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True
+            universal_newlines=True,
+            encoding='utf-8'
         )
 
         stdout, stderr = process.communicate()
 
         if process.returncode != 0:
+            self.logger.error(f"dcm2niix 错误：{stderr}")
             raise RuntimeError(f"dcm2niix 错误：{stderr}")
 
         # 查找生成的文件
         nii_files = list(output_dir.glob("*.nii*"))
 
+        self.logger.info(f"生成 {len(nii_files)} 个 NIfTI 文件")
+
         return {
             "success": True,
             "output_dir": str(output_dir),
-            "files": [str(f) for f in nii_files],
+            "files": [str(f) for f in nii_files],  # ← 转为字符串
             "file_count": len(nii_files)
         }
 

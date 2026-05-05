@@ -127,11 +127,17 @@ class MainWindow(QMainWindow):
     def _create_panels(self):
         """创建功能面板"""
         self.dicom_panel = DicomConvertPanel(self.config)
-        self.file_panel = FileManagerPanel(self.config)
-        self.structural_panel = StructuralPanel(self.config)
-        self.functional_panel = FunctionalPanel(self.config)
-        self.transform_panel = TransformPanel(self.config)
+        self.file_panel = FileManagerPanel(self.config, with_preview=True)
+        self.structural_panel = StructuralPanel(self.config, with_preview=True)
+        self.functional_panel = FunctionalPanel(self.config, with_preview=True)
+        self.transform_panel = TransformPanel(self.config, with_preview=True)
 
+        # ← 关键：建立面板间通信
+        self.dicom_panel.file_manager = self.file_panel  # DICOM → 文件管理器
+        self.file_panel.file_selected.connect(self.structural_panel.set_file)  # 文件管理器 → 结构像
+        self.file_panel.file_selected.connect(self.functional_panel.set_file)  # 文件管理器 → 功能像
+
+        # 添加到堆栈
         self.content_stack.addWidget(self.dicom_panel)
         self.content_stack.addWidget(self.file_panel)
         self.content_stack.addWidget(self.structural_panel)

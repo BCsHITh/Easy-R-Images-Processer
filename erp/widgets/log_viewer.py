@@ -39,7 +39,23 @@ class LogViewer(QTextEdit):
 
         html = f'<span style="color: #6a9955;">[{timestamp}]</span> <span style="color: {color};">{level}:</span> {message}'
         self.append(html)
-        self.scrollToBottom()
+
+        # ← 修复：使用兼容的方式滚动到底部
+        self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self):
+        """滚动到底部（兼容不同 PySide6 版本）"""
+        try:
+            # 方法 1：直接使用 scrollToBottom
+            if hasattr(self, 'scrollToBottom'):
+                self.scrollToBottom()
+            # 方法 2：使用垂直滚动条
+            elif hasattr(self, 'verticalScrollBar'):
+                scrollbar = self.verticalScrollBar()
+                if scrollbar:
+                    scrollbar.setValue(scrollbar.maximum())
+        except Exception as e:
+            pass  # 静默失败，不影响功能
 
     def clear_log(self):
         """清空日志"""

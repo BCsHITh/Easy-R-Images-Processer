@@ -148,8 +148,9 @@ class FileRegistry:
             data = {k: v.to_dict() for k, v in self.files.items()}
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"✅ 文件注册表已保存：{len(self.files)} 个文件")
         except Exception as e:
-            print(f"保存文件注册表失败：{e}")
+            print(f"❌ 保存文件注册表失败：{e}")
 
     def _load(self):
         """从文件加载"""
@@ -159,5 +160,6 @@ class FileRegistry:
                     data = json.load(f)
                 for k, v in data.items():
                     self.files[k] = FileRecord.from_dict(v)
+                print(f"✅ 文件注册表已加载：{len(self.files)} 个文件")
             except Exception as e:
-                print(f"加载文件注册表失败：{e}")
+                print(f"❌ 加载文件注册表失败：{e}")

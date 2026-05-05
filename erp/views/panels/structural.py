@@ -1,5 +1,5 @@
 """
-结构像处理面板
+结构像处理面板（支持文件管理器联动）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox,
@@ -14,9 +14,10 @@ from erp.views.panels.base_panel import BasePanel
 class StructuralPanel(BasePanel):
     """结构像处理面板"""
 
-    def __init__(self, config, parent=None):
+    def __init__(self, config, parent=None, with_preview=True):
         self.config = config
-        super().__init__("3. 结构像处理", parent, with_preview=True)
+        # ← 关键：正确传递 with_preview 给父类
+        super().__init__("3. 结构像处理", parent, with_preview)
 
     def _create_tool_panel(self):
         """创建工具面板"""
@@ -29,7 +30,8 @@ class StructuralPanel(BasePanel):
         input_layout = QFormLayout()
 
         self.t1w_edit = QLineEdit()
-        self.t1w_edit.setPlaceholderText("选择 T1w 文件...")
+        self.t1w_edit.setPlaceholderText("从文件管理器选择或浏览...")
+        self.t1w_edit.setReadOnly(True)
         t1w_btn = QPushButton("浏览...")
         t1w_btn.clicked.connect(lambda: self._select_file(self.t1w_edit, "T1w"))
 
@@ -39,7 +41,8 @@ class StructuralPanel(BasePanel):
         input_layout.addRow("T1w:", t1w_layout)
 
         self.t2w_edit = QLineEdit()
-        self.t2w_edit.setPlaceholderText("选择 T2w 文件 (可选)...")
+        self.t2w_edit.setPlaceholderText("从文件管理器选择或浏览...")
+        self.t2w_edit.setReadOnly(True)
         t2w_btn = QPushButton("浏览...")
         t2w_btn.clicked.connect(lambda: self._select_file(self.t2w_edit, "T2w"))
 
@@ -55,7 +58,6 @@ class StructuralPanel(BasePanel):
         process_group = QGroupBox("处理流程")
         process_layout = QVBoxLayout()
 
-        # 流程选项
         self.rigid_check = QCheckBox("i. 刚性配准 (T1w 对齐)")
         self.rigid_check.setChecked(True)
         process_layout.addWidget(self.rigid_check)
@@ -132,7 +134,15 @@ class StructuralPanel(BasePanel):
         if file_path:
             line_edit.setText(file_path)
 
+    def set_file(self, file_path: str, file_type: str):
+        """从文件管理器设置文件"""
+        if file_type == "T1w":
+            self.t1w_edit.setText(file_path)
+            self.log(f"已设置 T1w: {file_path}")
+        elif file_type == "T2w":
+            self.t2w_edit.setText(file_path)
+            self.log(f"已设置 T2w: {file_path}")
+
     def _start_processing(self):
         """开始处理"""
         self.log("结构像处理功能开发中...", "WARNING")
-        # 后续实现核心处理逻辑
