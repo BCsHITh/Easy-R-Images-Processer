@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
 import json
-
+import re
 
 class FileType(Enum):
     """文件类型枚举"""
@@ -35,10 +35,50 @@ class FileRecord:
         self.file_path = Path(file_path)
         self.file_type = file_type
         self.status = FileStatus.NEW
+        self.subject_id = self._extract_subject_id()  # ← 新增：实验编号
+        self.session_id = self._extract_session_id()  # ← 新增：会话编号
         self.created_time = datetime.now()
         self.last_used_time: Optional[datetime] = None
         self.used_by: List[str] = []  # 被哪些流程使用过
         self.notes: str = ""
+
+    def _extract_subject_id(self) -> str:
+        """从文件名提取实验编号"""
+        name = self.file_path.name.upper()
+
+        # 常见命名模式
+        patterns = [
+            r'(MOUSE\d+)',  # MOUSE001
+            r'(RAT\d+)',  # RAT001
+            r'(SUB\d+)',  # SUB001
+            r'(S\d+)',  # S001
+            r'([A-Z]+\d{3,})',  # ABC001
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, name)
+            if match:
+                return match.group(1)
+
+        # 如果没有匹配，使用父目录名
+        return self.file_path.parent.name or "Unknown"
+
+    def _extract_session_id(self) -> str:
+        """从文件名提取会话编号"""
+        name = self.file_path.name.upper()
+
+        patterns = [
+            r'(SES\d+)',  # SES01
+            r'(SESSION\d+)',  # SESSION01
+            r'(_\d+)',  # _01
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, name)
+            if match:
+                return match.group(1)
+
+        return "01"  # 默认会话
 
     def to_dict(self) -> dict:
         """转换为字典"""
@@ -46,6 +86,8 @@ class FileRecord:
             "file_path": str(self.file_path),
             "file_type": self.file_type.value,
             "status": self.status.value,
+            "subject_id": self.subject_id,
+            "session_id": self.session_id,
             "created_time": self.created_time.isoformat(),
             "last_used_time": self.last_used_time.isoformat() if self.last_used_time else None,
             "used_by": self.used_by,
@@ -57,6 +99,8 @@ class FileRecord:
         """从字典创建"""
         record = cls(data["file_path"], FileType(data["file_type"]))
         record.status = FileStatus(data["status"])
+        record.subject_id = data.get("subject_id", record._extract_subject_id())
+        record.session_id = data.get("session_id", record._extract_session_id())
         record.created_time = datetime.fromisoformat(data["created_time"])
         if data.get("last_used_time"):
             record.last_used_time = datetime.fromisoformat(data["last_used_time"])
@@ -84,13 +128,20 @@ class FileRegistry:
         self.config_path = Path("config/file_registry.json")
         self._load()
 
+    def reset(self):
+        """重置注册表（用于 debug 重启）"""
+        self.files = {}
+        self._load()
+
     def add_file(self, file_path: str, file_type: FileType = FileType.UNKNOWN,
-                 status: FileStatus = FileStatus.NEW) -> FileRecord:
+                 status: FileStatus = FileStatus.NEW, subject_id: Optional[str] = None) -> FileRecord:
         """添加文件"""
         path_str = str(Path(file_path).absolute())
         if path_str not in self.files:
             record = FileRecord(path_str, file_type)
             record.status = status
+            if subject_id:  # 允许手动设置实验编号
+                record.subject_id = subject_id
             self.files[path_str] = record
             self._save()
         return self.files[path_str]
@@ -116,6 +167,13 @@ class FileRegistry:
                 record.used_by.append(used_by)
             self._save()
 
+    def set_subject_id(self, file_path: str, subject_id: str):
+        """设置实验编号"""
+        record = self.get_file(file_path)
+        if record:
+            record.subject_id = subject_id
+            self._save()
+
     def classify_file(self, file_path: str) -> FileType:
         """根据文件名自动分类"""
         path = Path(file_path)
@@ -136,6 +194,19 @@ class FileRegistry:
     def get_files_by_type(self, file_type: FileType) -> List[FileRecord]:
         """按类型获取文件"""
         return [f for f in self.files.values() if f.file_type == file_type]
+
+    def get_files_by_subject(self, subject_id: str) -> List[FileRecord]:
+        """按实验编号获取文件"""
+        return [f for f in self.files.values() if f.subject_id == subject_id]
+
+    def get_files_by_subject_and_type(self, subject_id: str, file_type: FileType) -> List[FileRecord]:
+        """按实验编号和类型获取文件"""
+        return [f for f in self.files.values()
+                if f.subject_id == subject_id and f.file_type == file_type]
+
+    def get_all_subjects(self) -> List[str]:
+        """获取所有实验编号"""
+        return sorted(list(set(f.subject_id for f in self.files.values())))
 
     def get_all_files(self) -> List[FileRecord]:
         """获取所有文件"""

@@ -24,7 +24,7 @@ class CoronalViewer(QWidget):
         self.spacing = [1.0, 1.0, 1.0]
         self.tr = 2.0
         self.current_file = None
-
+        self._event_filter_installed = False
         # 固定预览窗口尺寸
         self.viewer_size = QSize(280, 280)
 
@@ -53,7 +53,10 @@ class CoronalViewer(QWidget):
         self.image_container.setStyleSheet("background-color: #000; border: 1px solid #3e3e3e;")
 
         # 安装事件过滤器
-        self.image_container.installEventFilter(self)
+        '''self.image_container.installEventFilter(self)'''
+        if not self._event_filter_installed:
+            self.image_container.installEventFilter(self)
+            self._event_filter_installed = True
 
         container_layout = QVBoxLayout(self.image_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -94,6 +97,7 @@ class CoronalViewer(QWidget):
 
         if event.type() == QEvent.Wheel:
             if isinstance(event, QWheelEvent):
+                print(f"[CoronalViewer] 滚轮事件：delta={event.angleDelta().y()}")
                 delta = event.angleDelta().y()
                 if delta > 0:
                     self._next_slice()
@@ -105,6 +109,7 @@ class CoronalViewer(QWidget):
 
     def wheelEvent(self, event):
         """直接处理滚轮事件（备用方案）"""
+        print(f"[CoronalViewer] wheelEvent: delta={event.angleDelta().y()}")
         delta = event.angleDelta().y()
         if delta > 0:
             self._next_slice()

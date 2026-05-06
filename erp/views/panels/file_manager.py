@@ -261,50 +261,69 @@ class FileManagerPanel(BasePanel):
 
         return group
 
+    # 修改 _refresh_tree 方法
     def _refresh_tree(self):
-        """刷新文件树"""
+        """刷新文件树（按实验编号 → 文件类型 两级分类）"""
         self.file_tree.clear()
 
-        # 按类型分组
-        categories = {
-            "T1w 结构像": FileType.T1W,
-            "T2w 结构像": FileType.T2W,
-            "BOLD 功能像": FileType.BOLD,
-            "DWI 扩散像": FileType.DWI,
-            "其他文件": FileType.OTHER,
-            "未分类": FileType.UNKNOWN
-        }
+        # 获取所有实验编号
+        subjects = self.registry.get_all_subjects()
 
-        for cat_name, file_type in categories.items():
-            files = self.registry.get_files_by_type(file_type)
-            if files:
-                cat_item = QTreeWidgetItem([cat_name, "", "", ""])
-                cat_item.setForeground(0, Qt.darkGray)
-                cat_item.setExpanded(True)  # 默认展开
+        if not subjects:
+            # 没有文件时显示提示
+            empty_item = QTreeWidgetItem(["📭 暂无文件", "", "", ""])
+            empty_item.setForeground(0, Qt.gray)
+            self.file_tree.addTopLevelItem(empty_item)
+            return
 
-                for f in sorted(files, key=lambda x: x.file_path.name):
-                    item = QTreeWidgetItem([
-                        f.file_path.name,
-                        f.file_type.value,
-                        f.status.value,
-                        str(f.file_path.parent)
-                    ])
-                    item.setData(0, Qt.UserRole, str(f.file_path))
-                    item.setToolTip(0, str(f.file_path))
+        for subject_id in subjects:
+            # 创建实验编号节点
+            subject_item = QTreeWidgetItem([f"🧪 {subject_id}", "", "", ""])
+            subject_item.setForeground(0, Qt.darkBlue)
+            subject_item.setExpanded(True)
 
-                    # 状态颜色
-                    if f.status == FileStatus.NEW:
-                        item.setForeground(2, Qt.green)
-                    elif f.status == FileStatus.USED:
-                        item.setForeground(2, Qt.blue)
-                    elif f.status == FileStatus.CONVERTED:
-                        item.setForeground(2, Qt.darkGreen)
-                    elif f.status == FileStatus.COMPLETED:
-                        item.setForeground(2, Qt.darkCyan)
+            # 按类型分组该实验编号的文件
+            subject_files = self.registry.get_files_by_subject(subject_id)
 
-                    cat_item.addChild(item)
+            type_groups = {
+                "🧠 T1w 结构像": FileType.T1W,
+                "🧠 T2w 结构像": FileType.T2W,
+                "⚡ BOLD 功能像": FileType.BOLD,
+                "🔬 DWI 扩散像": FileType.DWI,
+                "📄 其他文件": FileType.OTHER,
+            }
 
-                self.file_tree.addTopLevelItem(cat_item)
+            for type_name, file_type in type_groups.items():
+                files = [f for f in subject_files if f.file_type == file_type]
+                if files:
+                    type_item = QTreeWidgetItem([type_name, "", "", ""])
+                    type_item.setForeground(0, Qt.darkGray)
+                    type_item.setExpanded(True)
+
+                    for f in sorted(files, key=lambda x: x.file_path.name):
+                        item = QTreeWidgetItem([
+                            f.file_path.name,
+                            f.file_type.value,
+                            f.status.value,
+                            str(f.file_path.parent)
+                        ])
+                        item.setData(0, Qt.UserRole, str(f.file_path))
+                        item.setToolTip(0, str(f.file_path))
+
+                        # 状态颜色
+                        if f.status == FileStatus.NEW:
+                            item.setForeground(2, Qt.green)
+                        elif f.status == FileStatus.USED:
+                            item.setForeground(2, Qt.blue)
+                        elif f.status == FileStatus.CONVERTED:
+                            item.setForeground(2, Qt.darkGreen)
+
+                        # ← 关键修复：添加到 type_item，不是 type_item 自己
+                        type_item.addChild(item)  # ✅ 正确
+
+                    subject_item.addChild(type_item)
+
+            self.file_tree.addTopLevelItem(subject_item)
 
     def _add_files(self):
         """添加文件"""

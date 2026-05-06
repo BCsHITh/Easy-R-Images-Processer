@@ -14,6 +14,9 @@ def main():
     # 1. 初始化配置
     config = ConfigManager()
 
+    from erp.utils.file_registry import FileRegistry
+    FileRegistry._instance = None  # 重置单例
+
     # 2. 设置日志
     setup_logger(config.log_file)
 

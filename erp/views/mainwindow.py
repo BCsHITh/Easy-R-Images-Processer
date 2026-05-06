@@ -126,6 +126,14 @@ class MainWindow(QMainWindow):
 
     def _create_panels(self):
         """创建功能面板"""
+        # 先断开旧连接（如果存在）
+        if hasattr(self, 'file_panel'):
+            try:
+                self.file_panel.file_selected.disconnect(self.structural_panel.set_file)
+                self.file_panel.file_selected.disconnect(self.functional_panel.set_file)
+            except:
+                pass  # 没有连接也不报错
+
         self.dicom_panel = DicomConvertPanel(self.config)
         self.file_panel = FileManagerPanel(self.config, with_preview=True)
         self.structural_panel = StructuralPanel(self.config, with_preview=True)
