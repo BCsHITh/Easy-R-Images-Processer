@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 
 from erp.views.panels.base_panel import BasePanel
 from erp.core.processor import StructuralProcessor
+from pathlib import Path
 
 
 class StructuralWorker(QThread):
@@ -349,8 +350,19 @@ class StructuralPanel(BasePanel):
         """开始处理"""
         # 获取所有选中的 T1w 文件
         t1w_paths = []
+        # for i in range(self.t1w_list.count()):
+        #     t1w_paths.append(self.t1w_list.item(i).data(Qt.UserRole))
+        #
+        # output_dir = self.output_edit.text().strip()
         for i in range(self.t1w_list.count()):
-            t1w_paths.append(self.t1w_list.item(i).data(Qt.UserRole))
+            item = self.t1w_list.item(i)
+            path = item.data(Qt.UserRole)
+
+            # ← 新增：双重检查数据类型
+            if isinstance(path, str) and path:
+                t1w_paths.append(path)
+            else:
+                self.log(f"警告：跳过无效的 T1w 路径项 (类型：{type(path)})")
 
         output_dir = self.output_edit.text().strip()
 
@@ -371,7 +383,7 @@ class StructuralPanel(BasePanel):
 
         # 准备参数
         params = {
-            't1w_paths': t1w_paths,  # ← 列表
+            't1w_paths': t1w_paths,
             'output_dir': output_dir,
             't2w_path': self.t2w_edit.text().strip() or None,
             'template_path': self.template_edit.text().strip() or None,

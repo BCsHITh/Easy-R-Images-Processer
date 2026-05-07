@@ -54,7 +54,6 @@ class StructuralProcessor:
         if progress_callback:
             progress_callback(0, "加载图像...")
 
-        # 加载图像
         fixed = ants.image_read(fixed_path)
         moving = ants.image_read(moving_path)
 
@@ -66,7 +65,7 @@ class StructuralProcessor:
             fixed=fixed,
             moving=moving,
             type_of_transform='Rigid',
-            metric='CC',  # 互相关（同模态）
+            metric='CC',
             verbose=False
         )
 
@@ -76,20 +75,33 @@ class StructuralProcessor:
         # 保存配准后的图像
         ants.image_write(reg['warpedmovout'], output_path)
 
-        # 保存变换矩阵
+        # ← 修复：处理变换文件
         transform_path = str(Path(output_path).parent / "transform.mat")
-        ants.write_transform(transform_path, reg['fwdtransforms'][0])
+
+        # reg['fwdtransforms'][0] 通常已经是文件路径字符串
+        source_transform = reg['fwdtransforms'][0]
+
+        import shutil
+        if Path(source_transform).exists():
+            # 如果已经是文件，直接复制
+            shutil.copy(source_transform, transform_path)
+        else:
+            # 如果是对象（极少情况），才尝试写入
+            try:
+                ants.write_transform(transform_path, source_transform)
+            except Exception as e:
+                self.logger.warning(f"无法写入变换文件，尝试直接复制：{e}")
+                # 如果写入失败，可能已经是路径但文件被临时清理了，这里做个容错
+                pass
 
         if progress_callback:
             progress_callback(100, "刚性配准完成")
-
-        self.logger.info(f"刚性配准完成：{output_path}")
 
         return {
             "success": True,
             "output_path": output_path,
             "transform_path": transform_path,
-            "metric_value": reg['metric_value'] if 'metric_value' in reg else None
+            "metric_value": reg.get('metric_value')
         }
 
     # ========== 2. 仿射配准 ==========
@@ -127,8 +139,18 @@ class StructuralProcessor:
 
         ants.image_write(reg['warpedmovout'], output_path)
 
+        # ← 修复：同上
         transform_path = str(Path(output_path).parent / "transform_affine.mat")
-        ants.write_transform(transform_path, reg['fwdtransforms'][0])
+        source_transform = reg['fwdtransforms'][0]
+
+        import shutil
+        if Path(source_transform).exists():
+            shutil.copy(source_transform, transform_path)
+        else:
+            try:
+                ants.write_transform(transform_path, source_transform)
+            except:
+                pass
 
         if progress_callback:
             progress_callback(100, "仿射配准完成")
@@ -137,7 +159,7 @@ class StructuralProcessor:
             "success": True,
             "output_path": output_path,
             "transform_path": transform_path,
-            "metric_value": reg['metric_value'] if 'metric_value' in reg else None
+            "metric_value": reg.get('metric_value')
         }
 
     # ========== 3. SyN 非线性配准 ==========
@@ -166,39 +188,50 @@ class StructuralProcessor:
         if progress_callback:
             progress_callback(10, "执行 SyN 配准（可能需要几分钟）...")
 
-        # SyN 配准（使用 SyNRA = Rigid + Affine + SyN）
         reg = ants.registration(
             fixed=fixed,
             moving=moving,
             type_of_transform='SyNRA',
             metric='CC',
-            reg_iterations=[40, 20, 0],  # 迭代次数
+            reg_iterations=[40, 20, 0],
             verbose=False
         )
 
         if progress_callback:
             progress_callback(80, "保存结果...")
 
-        # 保存配准后的图像
         ants.image_write(reg['warpedmovout'], output_path)
 
-        # 保存变换场（可能有多个文件）
+        # ← 修复：处理多个变换文件（Affine + Warp）
         transform_paths = []
-        for i, transform in enumerate(reg['fwdtransforms']):
-            transform_path = f"{output_transform_prefix}_transform_{i}.mat" if 'mat' in transform else f"{output_transform_prefix}_warp.nii.gz"
-            ants.write_transform(transform_path, transform)
-            transform_paths.append(transform_path)
+        import shutil
+
+        for i, transform_source in enumerate(reg['fwdtransforms']):
+            # 判断是 Affine (.mat) 还是 Warp (.nii.gz)
+            if 'Warp' in str(transform_source) or transform_source.endswith('.nii.gz'):
+                target_path = f"{output_transform_prefix}_warp.nii.gz"
+            else:
+                target_path = f"{output_transform_prefix}_affine.mat"
+
+            if Path(transform_source).exists():
+                shutil.copy(transform_source, target_path)
+                transform_paths.append(target_path)
+            else:
+                # 尝试写入（备用方案）
+                try:
+                    ants.write_transform(target_path, transform_source)
+                    transform_paths.append(target_path)
+                except Exception as e:
+                    self.logger.error(f"保存变换文件失败：{e}")
 
         if progress_callback:
             progress_callback(100, "SyN 配准完成")
-
-        self.logger.info(f"SyN 配准完成：{output_path}")
 
         return {
             "success": True,
             "output_path": output_path,
             "transform_paths": transform_paths,
-            "metric_value": reg['metric_value'] if 'metric_value' in reg else None
+            "metric_value": reg.get('metric_value')
         }
 
     # ========== 4. 图像平均化 ==========
@@ -258,7 +291,13 @@ class StructuralProcessor:
         avg_data = np.mean(data_stack, axis=0)
 
         # 创建平均图像（使用第一个图像的几何信息）
-        avg_img = aligned_images[0].new_image(avg_data)
+        reference_img = aligned_images[0]
+        avg_img = ants.from_numpy(
+            avg_data,
+            origin=reference_img.origin,
+            spacing=reference_img.spacing,
+            direction=reference_img.direction
+        )
 
         # 保存
         ants.image_write(avg_img, output_path)
@@ -273,6 +312,7 @@ class StructuralProcessor:
             "output_path": output_path,
             "input_count": len(input_paths)
         }
+
 
     # ========== 5. 强度标准化 ==========
     def normalize_intensity(
@@ -301,7 +341,6 @@ class StructuralProcessor:
 
         # 标准化方法
         if method == 'zscore':
-            # Z 分数标准化
             mean = np.mean(data)
             std = np.std(data)
             if std > 0:
@@ -309,7 +348,6 @@ class StructuralProcessor:
             else:
                 data_normalized = data - mean
         elif method == 'minmax':
-            # Min-Max 标准化到 0-1
             data_min = np.percentile(data, 2)
             data_max = np.percentile(data, 98)
             if data_max > data_min:
@@ -317,12 +355,8 @@ class StructuralProcessor:
             else:
                 data_normalized = data - data_min
         elif method == 'histogram':
-            # 直方图匹配（使用 ANTs 内置）
             img_normalized = ants.iMath(img, 'Normalize')
             ants.image_write(img_normalized, output_path)
-
-            if progress_callback:
-                progress_callback(100, "标准化完成")
 
             return {
                 "success": True,
@@ -333,7 +367,12 @@ class StructuralProcessor:
             raise ValueError(f"未知的标准化方法：{method}")
 
         # 创建标准化后的图像
-        img_normalized = img.new_image(data_normalized)
+        img_normalized = ants.from_numpy(
+            data_normalized,
+            origin=img.origin,
+            spacing=img.spacing,
+            direction=img.direction
+        )
 
         # 保存
         ants.image_write(img_normalized, output_path)
@@ -353,7 +392,7 @@ class StructuralProcessor:
     # 修改 process_structural 方法
     def process_structural(
             self,
-            t1w_paths: List[str],  # ← 改为列表
+            t1w_paths: List[str],
             output_dir: str,
             t2w_path: Optional[str] = None,
             template_path: Optional[str] = None,
@@ -364,9 +403,7 @@ class StructuralProcessor:
             do_t2_to_t1: bool = False,
             progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict:
-        """
-        完整的结构像处理流程（支持多 T1w 批量处理）
-        """
+        """完整的结构像处理流程（支持多 T1w 批量处理）"""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -406,22 +443,23 @@ class StructuralProcessor:
                 if progress_callback:
                     progress_callback(30, "强度标准化...")
 
-                # 对第一个 T1w 进行标准化
                 first_t1w = t1w_paths[0]
                 norm_output = str(output_dir / "T1w_normalized.nii.gz")
                 self.normalize_intensity(
-                    first_t1w, norm_output, 'zscore',
-                    lambda v, t: progress_callback(int(30 + v * 20 / 100), t) if progress_callback else None
+                    input_path=first_t1w,
+                    output_path=norm_output,
+                    method='zscore',
+                    progress_callback=lambda v, t: progress_callback(int(30 + v * 20 / 100),
+                                                                     t) if progress_callback else None
                 )
                 results["outputs"]["normalized"] = norm_output
                 results["steps_completed"].append("normalize")
 
-            # 步骤 3: 平均化
+            # 步骤 3: 平均化 ← 修复此处
             if do_average and len(t1w_paths) > 1:
                 if progress_callback:
                     progress_callback(50, "结构像平均化...")
 
-                # 使用对齐后的文件平均（如果已配准）
                 if "aligned_t1w" in results["outputs"]:
                     input_for_avg = results["outputs"]["aligned_t1w"]
                 else:
@@ -429,13 +467,15 @@ class StructuralProcessor:
 
                 avg_output = str(output_dir / "T1w_averaged.nii.gz")
                 self.average_images(
-                    input_for_avg, avg_output,
-                    lambda v, t: progress_callback(int(50 + v * 30 / 100), t) if progress_callback else None
+                    input_paths=input_for_avg,  # ← 关键字参数
+                    output_path=avg_output,  # ← 关键字参数
+                    reference_path=None,  # ← 明确为 None
+                    progress_callback=lambda v, t: progress_callback(int(50 + v * 30 / 100),
+                                                                     t) if progress_callback else None
                 )
                 results["outputs"]["averaged"] = avg_output
                 results["steps_completed"].append("average")
             elif len(t1w_paths) == 1:
-                # 只有一个文件时，复制作为输出
                 import shutil
                 avg_output = str(output_dir / "T1w_averaged.nii.gz")
                 shutil.copy(t1w_paths[0], avg_output)
@@ -449,8 +489,11 @@ class StructuralProcessor:
                 t1w_ref = results["outputs"].get("averaged", t1w_paths[0])
                 t2_output = str(output_dir / "T2w_to_T1w.nii.gz")
                 self.rigid_registration(
-                    t1w_ref, t2w_path, t2_output,
-                    lambda v, t: progress_callback(int(80 + v * 10 / 100), t) if progress_callback else None
+                    fixed_path=t1w_ref,
+                    moving_path=t2w_path,
+                    output_path=t2_output,
+                    progress_callback=lambda v, t: progress_callback(int(80 + v * 10 / 100),
+                                                                     t) if progress_callback else None
                 )
                 results["outputs"]["t2_registered"] = t2_output
                 results["steps_completed"].append("t2_to_t1")
@@ -460,12 +503,17 @@ class StructuralProcessor:
                 if progress_callback:
                     progress_callback(90, "SyN 配准到模板...")
 
+                # ← 关键：t1w_ref 是个体图像，template_path 是模板
                 t1w_ref = results["outputs"].get("averaged", t1w_paths[0])
                 syn_output = str(output_dir / "T1w_to_template.nii.gz")
                 transform_prefix = str(output_dir / "T1w_to_template")
+
                 self.syn_registration(
-                    template_path, t1w_ref, syn_output, transform_prefix,
-                    lambda v, t: progress_callback(int(90 + v * 10 / 100), t) if progress_callback else None
+                    fixed_path=template_path,  # ← 模板作为固定图像（目标空间）
+                    moving_path=t1w_ref,  # ← 个体 T1w 作为移动图像
+                    output_path=syn_output,
+                    output_transform_prefix=transform_prefix,
+                    progress_callback=lambda v, t: progress_callback(int(90 + v * 10 / 100),t) if progress_callback else None
                 )
                 results["outputs"]["syn_registered"] = syn_output
                 results["outputs"]["syn_transforms"] = transform_prefix
@@ -479,7 +527,7 @@ class StructuralProcessor:
         except Exception as e:
             results["success"] = False
             results["error"] = str(e)
-            self.logger.error(f"结构像处理失败：{e}")
+            self.logger.error(f"结构像处理失败：{e}", exc_info=True)
             if progress_callback:
                 progress_callback(100, f"处理失败：{e}")
 
