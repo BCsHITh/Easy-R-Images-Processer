@@ -49,6 +49,20 @@ class StructuralProcessor:
         Returns:
             dict: 配准结果信息
         """
+        #add
+        fixed = ants.image_read(fixed_path)
+        moving = ants.image_read(moving_path)
+
+        fixed_orient = ants.get_orientation(fixed)
+        moving_orient = ants.get_orientation(moving)
+
+        self.logger.info(f"刚性配准方向检查：")
+        self.logger.info(f"  Fixed:  {fixed_path} → {fixed_orient}")
+        self.logger.info(f"  Moving: {moving_path} → {moving_orient}")
+
+        if fixed_orient != moving_orient:
+            self.logger.warning(f"  ⚠️ 方向不一致！可能导致配准问题")
+        #add
         self.logger.info(f"刚性配准：{moving_path} → {fixed_path}")
 
         if progress_callback:
@@ -177,6 +191,62 @@ class StructuralProcessor:
         Args:
             output_transform_prefix: 变换场输出前缀（会生成 Warp 和 Affine 文件）
         """
+        # self.logger.info(f"SyN 配准：{moving_path} → {fixed_path}")
+        #
+        # if progress_callback:
+        #     progress_callback(0, "加载图像...")
+        #
+        # fixed = ants.image_read(fixed_path)
+        # moving = ants.image_read(moving_path)
+        #
+        # if progress_callback:
+        #     progress_callback(10, "执行 SyN 配准（可能需要几分钟）...")
+        #
+        # reg = ants.registration(
+        #     fixed=fixed,
+        #     moving=moving,
+        #     type_of_transform='SyN',    #由SynRA改为Syn
+        #     metric='CC',
+        #     reg_iterations=[40, 20, 0],
+        #     verbose=False
+        # )
+        #
+        # if progress_callback:
+        #     progress_callback(80, "保存结果...")
+        #
+        # ants.image_write(reg['warpedmovout'], output_path)
+        #
+        # # ← 修复：处理多个变换文件（Affine + Warp）
+        # transform_paths = []
+        # import shutil
+        #
+        # for i, transform_source in enumerate(reg['fwdtransforms']):
+        #     # 判断是 Affine (.mat) 还是 Warp (.nii.gz)
+        #     if 'Warp' in str(transform_source) or transform_source.endswith('.nii.gz'):
+        #         target_path = f"{output_transform_prefix}_warp.nii.gz"
+        #     else:
+        #         target_path = f"{output_transform_prefix}_affine.mat"
+        #
+        #     if Path(transform_source).exists():
+        #         shutil.copy(transform_source, target_path)
+        #         transform_paths.append(target_path)
+        #     else:
+        #         # 尝试写入（备用方案）
+        #         try:
+        #             ants.write_transform(target_path, transform_source)
+        #             transform_paths.append(target_path)
+        #         except Exception as e:
+        #             self.logger.error(f"保存变换文件失败：{e}")
+        #
+        # if progress_callback:
+        #     progress_callback(100, "SyN 配准完成")
+        #
+        # return {
+        #     "success": True,
+        #     "output_path": output_path,
+        #     "transform_paths": transform_paths,
+        #     "metric_value": reg.get('metric_value')
+        # }
         self.logger.info(f"SyN 配准：{moving_path} → {fixed_path}")
 
         if progress_callback:
@@ -185,15 +255,29 @@ class StructuralProcessor:
         fixed = ants.image_read(fixed_path)
         moving = ants.image_read(moving_path)
 
+        # ← 新增：验证方向一致性
+        fixed_direction = fixed.direction
+        moving_direction = moving.direction
+
+        if not np.allclose(fixed_direction, moving_direction, atol=1e-4):
+            self.logger.warning(f"  ⚠️ 配准前方向不一致！")
+            self.logger.warning(f"  Fixed direction:\n{fixed_direction}")
+            self.logger.warning(f"  Moving direction:\n{moving_direction}")
+            # 这里可以选择自动重定向或报错
+            # 建议在 process_structural 中已经处理了方向统一
+
         if progress_callback:
             progress_callback(10, "执行 SyN 配准（可能需要几分钟）...")
 
+        # ← 优化：使用更保守的配准参数
         reg = ants.registration(
             fixed=fixed,
             moving=moving,
-            type_of_transform='SyNRA',
+            type_of_transform='SyNRA',  # Rigid + Affine + SyN
             metric='CC',
-            reg_iterations=[40, 20, 0],
+            reg_iterations=[40, 20, 0],  # 减少迭代次数
+            shrink_factors=[4, 2, 1],  # 多分辨率
+            smoothing_sigmas=[2, 1, 0],  # 平滑参数
             verbose=False
         )
 
@@ -202,27 +286,32 @@ class StructuralProcessor:
 
         ants.image_write(reg['warpedmovout'], output_path)
 
-        # ← 修复：处理多个变换文件（Affine + Warp）
+        # 保存变换场
         transform_paths = []
         import shutil
 
-        for i, transform_source in enumerate(reg['fwdtransforms']):
-            # 判断是 Affine (.mat) 还是 Warp (.nii.gz)
-            if 'Warp' in str(transform_source) or transform_source.endswith('.nii.gz'):
+        transforms_list = reg.get('fwdtransforms', [])
+        if not isinstance(transforms_list, list):
+            transforms_list = [transforms_list]
+
+        for i, transform_source in enumerate(transforms_list):
+            transform_str = str(transform_source) if transform_source is not None else ""
+
+            if not transform_str:
+                continue
+
+            if 'Warp' in transform_str or transform_str.endswith('.nii.gz'):
                 target_path = f"{output_transform_prefix}_warp.nii.gz"
             else:
                 target_path = f"{output_transform_prefix}_affine.mat"
 
-            if Path(transform_source).exists():
-                shutil.copy(transform_source, target_path)
-                transform_paths.append(target_path)
-            else:
-                # 尝试写入（备用方案）
-                try:
-                    ants.write_transform(target_path, transform_source)
-                    transform_paths.append(target_path)
-                except Exception as e:
-                    self.logger.error(f"保存变换文件失败：{e}")
+            try:
+                if Path(transform_source).exists():
+                    shutil.copy(str(transform_source), target_path)
+                    if target_path not in transform_paths:
+                        transform_paths.append(target_path)
+            except Exception as e:
+                self.logger.error(f"保存变换文件失败：{e}")
 
         if progress_callback:
             progress_callback(100, "SyN 配准完成")
@@ -418,6 +507,24 @@ class StructuralProcessor:
             raise ValueError("T1w 文件列表不能为空")
 
         try:
+            # ========== 预处理：方向统一 ==========
+            processed_t1w_paths = []
+
+            if progress_callback:
+                progress_callback(5, "检查并统一方向...")
+
+            for i, t1w_path in enumerate(t1w_paths):
+                if template_path and do_syn:
+                    # 如果有模板，统一到模板方向
+                    reoriented_path = str(output_dir / f"T1w_{i}_reoriented.nii.gz")
+                    self._reorient_to_standard(t1w_path, template_path, reoriented_path)
+                    processed_t1w_paths.append(reoriented_path)
+                else:
+                    # 没有模板，直接使用原文件
+                    processed_t1w_paths.append(t1w_path)
+
+            # 使用重定向后的文件进行后续处理
+            t1w_paths = processed_t1w_paths
             # 步骤 1: 刚性配准（多 T1w 对齐到第一个）
             if do_rigid and len(t1w_paths) > 1:
                 if progress_callback:
@@ -503,17 +610,18 @@ class StructuralProcessor:
                 if progress_callback:
                     progress_callback(90, "SyN 配准到模板...")
 
-                # ← 关键：t1w_ref 是个体图像，template_path 是模板
                 t1w_ref = results["outputs"].get("averaged", t1w_paths[0])
                 syn_output = str(output_dir / "T1w_to_template.nii.gz")
                 transform_prefix = str(output_dir / "T1w_to_template")
 
+                # ← 关键：确保方向已经统一，这里 fixed=模板，moving=个体
                 self.syn_registration(
-                    fixed_path=template_path,  # ← 模板作为固定图像（目标空间）
-                    moving_path=t1w_ref,  # ← 个体 T1w 作为移动图像
+                    fixed_path=template_path,
+                    moving_path=t1w_ref,
                     output_path=syn_output,
                     output_transform_prefix=transform_prefix,
-                    progress_callback=lambda v, t: progress_callback(int(90 + v * 10 / 100),t) if progress_callback else None
+                    progress_callback=lambda v, t: progress_callback(int(90 + v * 10 / 100),
+                                                                     t) if progress_callback else None
                 )
                 results["outputs"]["syn_registered"] = syn_output
                 results["outputs"]["syn_transforms"] = transform_prefix
@@ -532,3 +640,94 @@ class StructuralProcessor:
                 progress_callback(100, f"处理失败：{e}")
 
         return results
+
+    def _reorient_to_standard(self, image_path: str, reference_image_path: str, output_path: str) -> str:
+        """
+        将图像重定向到参考图像的方向
+
+        Args:
+            image_path: 需要重定向的图像
+            reference_image_path: 参考方向（通常是模板）
+            output_path: 输出路径
+
+        Returns:
+            str: 重定向后的图像路径
+        """
+        self.logger.info(f"检查并统一方向：{image_path}")
+
+        try:
+            img = ants.image_read(image_path)
+            ref = ants.image_read(reference_image_path)
+
+            # 获取方向矩阵
+            img_direction = img.direction
+            ref_direction = ref.direction
+
+            self.logger.info(f"  原始方向矩阵：\n{img_direction}")
+            self.logger.info(f"  参考方向矩阵：\n{ref_direction}")
+
+            # 检查方向是否相同（允许小误差）
+            if np.allclose(img_direction, ref_direction, atol=1e-4):
+                self.logger.info("  ✅ 方向一致，无需重定向")
+                import shutil
+                shutil.copy(image_path, output_path)
+                return output_path
+
+            # 检查是否是简单的轴翻转（正交矩阵）
+            is_orthogonal = np.allclose(np.abs(img_direction), np.eye(3), atol=1e-4)
+            is_ref_orthogonal = np.allclose(np.abs(ref_direction), np.eye(3), atol=1e-4)
+
+            self.logger.info(f"  原始图像正交：{is_orthogonal}")
+            self.logger.info(f"  参考图像正交：{is_ref_orthogonal}")
+
+            # 方向不一致，执行重定向 + 重采样
+            self.logger.info(f"  ⚠️ 方向不一致，执行重定向 + 重采样...")
+
+            # 方法 1：使用 reorient_image2（仅适用于正交方向）
+            if is_orthogonal and is_ref_orthogonal:
+                try:
+                    ref_orientation = ants.get_orientation(ref)
+                    self.logger.info(f"  参考图像方向：{ref_orientation}")
+
+                    img_reoriented = ants.reorient_image2(img, ref_orientation)
+                    ants.image_write(img_reoriented, output_path)
+                    self.logger.info(f"  ✅ 重定向完成 (reorient_image2)：{output_path}")
+                    return output_path
+                except Exception as e:
+                    self.logger.warning(f"  reorient_image2 失败：{e}")
+
+            # 方法 2：使用 resample_image 重采样到参考空间（推荐）
+            self.logger.info("  使用 resample_image 重采样到参考空间...")
+            try:
+                img_resampled = ants.resample_image(
+                    img,
+                    ref,  # 使用参考图像的几何信息
+                    interp_type='linear',  # 线性插值
+                    use_voxels=False  # 使用物理空间
+                )
+                ants.image_write(img_resampled, output_path)
+                self.logger.info(f"  ✅ 重采样完成：{output_path}")
+
+                # 验证结果
+                resampled = ants.image_read(output_path)
+                self.logger.info(f"  验证：输出方向矩阵形状 {resampled.direction.shape}")
+                if np.allclose(resampled.direction, ref_direction, atol=1e-4):
+                    self.logger.info(f"  ✅ 方向矩阵验证通过")
+                else:
+                    self.logger.warning(f"  ⚠️ 方向矩阵仍有差异")
+
+                return output_path
+            except Exception as e:
+                self.logger.error(f"  resample_image 失败：{e}")
+
+            # 方法 3：最终备用 - 复制原始文件
+            self.logger.warning(f"  ⚠️ 所有重定向方法失败，使用原始文件")
+            import shutil
+            shutil.copy(image_path, output_path)
+            return output_path
+
+        except Exception as e:
+            self.logger.error(f"  ❌ 方向检查失败：{e}", exc_info=True)
+            import shutil
+            shutil.copy(image_path, output_path)
+            return output_path
