@@ -273,11 +273,13 @@ class StructuralProcessor:
         reg = ants.registration(
             fixed=fixed,
             moving=moving,
-            type_of_transform='SyNRA',  # Rigid + Affine + SyN
+            type_of_transform='SyN',  # Rigid + Affine + SyN
             metric='CC',
             reg_iterations=[40, 20, 0],  # 减少迭代次数
             shrink_factors=[4, 2, 1],  # 多分辨率
             smoothing_sigmas=[2, 1, 0],  # 平滑参数
+            flow_sigma=3.0,  # ← 新增：限制形变场平滑度
+            total_sigma=0.0,  # ← 新增：总变换平滑度
             verbose=False
         )
 
@@ -341,66 +343,102 @@ class StructuralProcessor:
         """
         self.logger.info(f"图像平均化：{len(input_paths)} 个图像 → {output_path}")
 
-        if len(input_paths) == 0:
+        if not input_paths:
             raise ValueError("输入图像列表不能为空")
+
+        # 验证输入路径
+        valid_paths = []
+        for i, p in enumerate(input_paths):
+            if isinstance(p, str) and p.strip():
+                if Path(p).exists():
+                    valid_paths.append(p)
+                else:
+                    self.logger.warning(f"忽略不存在的路径：{p}")
+            else:
+                self.logger.error(f"忽略无效的路径对象 (类型：{type(p)}): {p}")
+
+        if not valid_paths:
+            raise ValueError("没有有效的输入图像路径")
+
+        input_paths = valid_paths
 
         if progress_callback:
             progress_callback(0, f"加载 {len(input_paths)} 个图像...")
 
-        # 加载所有图像
-        images = [ants.image_read(p) for p in input_paths]
-
-        # 如果需要先配准
-        if reference_path and len(images) > 1:
-            if progress_callback:
-                progress_callback(20, "配准到参考图像...")
-
-            reference = ants.image_read(reference_path)
-            aligned_images = [reference]  # 参考图像不动
-
-            for i, img in enumerate(images[1:], 1):
-                reg = ants.registration(
-                    fixed=reference,
-                    moving=img,
-                    type_of_transform='Rigid',
-                    verbose=False
-                )
-                aligned_images.append(reg['warpedmovout'])
-
+        try:
+            # 加载所有图像
+            images = []
+            for i, p in enumerate(input_paths):
                 if progress_callback:
-                    progress_callback(20 + int(60 * i / len(images)), f"配准图像 {i}/{len(images) - 1}...")
-        else:
-            aligned_images = images
+                    progress_callback(int(i * 10 / len(input_paths)), f"加载图像 {i + 1}/{len(input_paths)}...")
+                img = ants.image_read(p)
+                images.append(img)
 
-        if progress_callback:
-            progress_callback(80, "计算平均值...")
+            if len(images) == 0:
+                raise ValueError("未能加载任何图像")
 
-        # 转换为 numpy 数组并平均
-        data_stack = np.stack([img.numpy() for img in aligned_images], axis=0)
-        avg_data = np.mean(data_stack, axis=0)
+            # ← 关键修复：始终配准到第一个图像（参考）
+            reference = images[0]
+            aligned_images = [reference]
 
-        # 创建平均图像（使用第一个图像的几何信息）
-        reference_img = aligned_images[0]
-        avg_img = ants.from_numpy(
-            avg_data,
-            origin=reference_img.origin,
-            spacing=reference_img.spacing,
-            direction=reference_img.direction
-        )
+            if len(images) > 1:
+                if progress_callback:
+                    progress_callback(10, "配准到参考图像...")
 
-        # 保存
-        ants.image_write(avg_img, output_path)
+                for i, img in enumerate(images[1:], 1):
+                    try:
+                        # 使用刚性配准
+                        reg = ants.registration(
+                            fixed=reference,
+                            moving=img,
+                            type_of_transform='Rigid',
+                            metric='CC',
+                            verbose=False
+                        )
+                        aligned_images.append(reg['warpedmovout'])
 
-        if progress_callback:
-            progress_callback(100, "平均化完成")
+                        if progress_callback:
+                            progress_callback(10 + int(40 * i / len(images)), f"配准图像 {i}/{len(images) - 1}...")
+                    except Exception as e:
+                        self.logger.warning(f"  配准失败 {input_paths[i]}: {e}")
+                        # 配准失败时使用原始图像
+                        aligned_images.append(img)
 
-        self.logger.info(f"图像平均化完成：{output_path}")
+            if progress_callback:
+                progress_callback(50, "计算平均值...")
 
-        return {
-            "success": True,
-            "output_path": output_path,
-            "input_count": len(input_paths)
-        }
+            # 转换为 numpy 数组并平均
+            data_stack = np.stack([img.numpy() for img in aligned_images], axis=0)
+            avg_data = np.mean(data_stack, axis=0)
+
+            # 创建平均图像（使用参考图像的几何信息）
+            avg_img = ants.from_numpy(
+                avg_data,
+                origin=reference.origin,
+                spacing=reference.spacing,
+                direction=reference.direction
+            )
+
+            # 保存
+            ants.image_write(avg_img, output_path)
+
+            if progress_callback:
+                progress_callback(100, "平均化完成")
+
+            self.logger.info(f"  平均化完成：{output_path}")
+            self.logger.info(f"  输入数量：{len(input_paths)}")
+            self.logger.info(f"  输出 Spacing: {avg_img.spacing}")
+            self.logger.info(f"  输出 Shape: {avg_img.shape}")
+
+            return {
+                "success": True,
+                "output_path": output_path,
+                "input_count": len(input_paths)
+            }
+
+        except Exception as e:
+            self.logger.error(f"平均化过程出错：{e}", exc_info=True)
+            raise
 
 
     # ========== 5. 强度标准化 ==========
@@ -492,7 +530,7 @@ class StructuralProcessor:
             do_t2_to_t1: bool = False,
             progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict:
-        """完整的结构像处理流程（支持多 T1w 批量处理）"""
+        """完整的结构像处理流程"""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -514,18 +552,27 @@ class StructuralProcessor:
                 progress_callback(5, "检查并统一方向...")
 
             for i, t1w_path in enumerate(t1w_paths):
+                # ← 关键修复：如果有模板，统一到模板方向；否则统一到第一个 T1w
                 if template_path and do_syn:
-                    # 如果有模板，统一到模板方向
                     reoriented_path = str(output_dir / f"T1w_{i}_reoriented.nii.gz")
                     self._reorient_to_standard(t1w_path, template_path, reoriented_path)
                     processed_t1w_paths.append(reoriented_path)
+                elif i == 0:
+                    # 第一个文件作为参考，直接复制
+                    reoriented_path = str(output_dir / f"T1w_{i}_reoriented.nii.gz")
+                    import shutil
+                    shutil.copy(t1w_path, reoriented_path)
+                    processed_t1w_paths.append(reoriented_path)
                 else:
-                    # 没有模板，直接使用原文件
-                    processed_t1w_paths.append(t1w_path)
+                    # 其他文件统一到第一个文件的方向
+                    reoriented_path = str(output_dir / f"T1w_{i}_reoriented.nii.gz")
+                    self._reorient_to_standard(t1w_path, processed_t1w_paths[0], reoriented_path)
+                    processed_t1w_paths.append(reoriented_path)
 
             # 使用重定向后的文件进行后续处理
             t1w_paths = processed_t1w_paths
-            # 步骤 1: 刚性配准（多 T1w 对齐到第一个）
+
+            # ========== 步骤 1: 刚性配准（多 T1w 对齐到第一个） ==========
             if do_rigid and len(t1w_paths) > 1:
                 if progress_callback:
                     progress_callback(10, "刚性配准（多 T1w 对齐）...")
@@ -536,16 +583,18 @@ class StructuralProcessor:
                 for i, t1w_path in enumerate(t1w_paths[1:], 1):
                     rigid_output = str(output_dir / f"T1w_{i}_rigid.nii.gz")
                     self.rigid_registration(
-                        reference, t1w_path, rigid_output,
-                        lambda v, t: progress_callback(int(10 + v * 20 / len(t1w_paths)),
-                                                       t) if progress_callback else None
+                        fixed_path=reference,
+                        moving_path=t1w_path,
+                        output_path=rigid_output,
+                        progress_callback=lambda v, t: progress_callback(int(10 + v * 20 / len(t1w_paths)),
+                                                                         t) if progress_callback else None
                     )
                     aligned_paths.append(rigid_output)
 
                 results["outputs"]["aligned_t1w"] = aligned_paths
                 results["steps_completed"].append("rigid_alignment")
 
-            # 步骤 2: 强度标准化
+            # ========== 步骤 2: 强度标准化 ==========
             if do_normalize:
                 if progress_callback:
                     progress_callback(30, "强度标准化...")
@@ -562,11 +611,12 @@ class StructuralProcessor:
                 results["outputs"]["normalized"] = norm_output
                 results["steps_completed"].append("normalize")
 
-            # 步骤 3: 平均化 ← 修复此处
+            # ========== 步骤 3: 平均化 ==========
             if do_average and len(t1w_paths) > 1:
                 if progress_callback:
                     progress_callback(50, "结构像平均化...")
 
+                # ← 关键修复：使用对齐后的文件平均
                 if "aligned_t1w" in results["outputs"]:
                     input_for_avg = results["outputs"]["aligned_t1w"]
                 else:
@@ -574,9 +624,9 @@ class StructuralProcessor:
 
                 avg_output = str(output_dir / "T1w_averaged.nii.gz")
                 self.average_images(
-                    input_paths=input_for_avg,  # ← 关键字参数
-                    output_path=avg_output,  # ← 关键字参数
-                    reference_path=None,  # ← 明确为 None
+                    input_paths=input_for_avg,
+                    output_path=avg_output,
+                    reference_path=t1w_paths[0],  # ← 明确指定参考
                     progress_callback=lambda v, t: progress_callback(int(50 + v * 30 / 100),
                                                                      t) if progress_callback else None
                 )
@@ -588,7 +638,7 @@ class StructuralProcessor:
                 shutil.copy(t1w_paths[0], avg_output)
                 results["outputs"]["averaged"] = avg_output
 
-            # 步骤 4: T2 配准到 T1
+            # ========== 步骤 4: T2 配准到 T1 ==========
             if do_t2_to_t1 and t2w_path:
                 if progress_callback:
                     progress_callback(80, "T2 配准到 T1...")
@@ -605,7 +655,7 @@ class StructuralProcessor:
                 results["outputs"]["t2_registered"] = t2_output
                 results["steps_completed"].append("t2_to_t1")
 
-            # 步骤 5: SyN 配准到模板
+            # ========== 步骤 5: SyN 配准到模板 ==========
             if do_syn and template_path:
                 if progress_callback:
                     progress_callback(90, "SyN 配准到模板...")
@@ -614,7 +664,6 @@ class StructuralProcessor:
                 syn_output = str(output_dir / "T1w_to_template.nii.gz")
                 transform_prefix = str(output_dir / "T1w_to_template")
 
-                # ← 关键：确保方向已经统一，这里 fixed=模板，moving=个体
                 self.syn_registration(
                     fixed_path=template_path,
                     moving_path=t1w_ref,
@@ -656,78 +705,112 @@ class StructuralProcessor:
         self.logger.info(f"检查并统一方向：{image_path}")
 
         try:
-            img = ants.image_read(image_path)
-            ref = ants.image_read(reference_image_path)
+            import nibabel as nib
+            import shutil
 
-            # 获取方向矩阵
-            img_direction = img.direction
-            ref_direction = ref.direction
+            # 读取参考图像的方向信息
+            ref_nii = nib.load(reference_image_path)
+            ref_affine = ref_nii.affine.copy()
 
-            self.logger.info(f"  原始方向矩阵：\n{img_direction}")
-            self.logger.info(f"  参考方向矩阵：\n{ref_direction}")
+            self.logger.info(f"  参考图像 Affine:\n{ref_affine}")
 
-            # 检查方向是否相同（允许小误差）
-            if np.allclose(img_direction, ref_direction, atol=1e-4):
-                self.logger.info("  ✅ 方向一致，无需重定向")
-                import shutil
+            # 读取原始图像
+            img_nii = nib.load(image_path)
+            img_affine = img_nii.affine.copy()
+
+            self.logger.info(f"  原始图像 Affine:\n{img_affine}")
+            self.logger.info(f"  原始图像 Shape: {img_nii.shape}")
+
+            # 检查 Affine 是否相同（允许小误差）
+            if np.allclose(img_affine, ref_affine, atol=1e-4):
+                self.logger.info("  ✅ Affine 矩阵一致，无需修改")
                 shutil.copy(image_path, output_path)
                 return output_path
 
-            # 检查是否是简单的轴翻转（正交矩阵）
-            is_orthogonal = np.allclose(np.abs(img_direction), np.eye(3), atol=1e-4)
-            is_ref_orthogonal = np.allclose(np.abs(ref_direction), np.eye(3), atol=1e-4)
+            # ← 正确方法：从 Affine 提取 spacing 和旋转
+            # 计算原始图像的 spacing（体素大小）
+            img_spacing = np.sqrt(np.sum(img_affine[:3, :3] ** 2, axis=0))
+            ref_spacing = np.sqrt(np.sum(ref_affine[:3, :3] ** 2, axis=0))
 
-            self.logger.info(f"  原始图像正交：{is_orthogonal}")
-            self.logger.info(f"  参考图像正交：{is_ref_orthogonal}")
+            self.logger.info(f"  原始图像 Spacing: {img_spacing}")
+            self.logger.info(f"  参考图像 Spacing: {ref_spacing}")
 
-            # 方向不一致，执行重定向 + 重采样
-            self.logger.info(f"  ⚠️ 方向不一致，执行重定向 + 重采样...")
+            # 提取旋转矩阵（归一化方向向量）
+            def extract_rotation(affine):
+                """从 Affine 矩阵提取旋转部分"""
+                rotation = affine[:3, :3].copy()
+                # 归一化每一列（去除 scaling）
+                for i in range(3):
+                    norm = np.linalg.norm(rotation[:, i])
+                    if norm > 1e-10:
+                        rotation[:, i] /= norm
+                return rotation
 
-            # 方法 1：使用 reorient_image2（仅适用于正交方向）
-            if is_orthogonal and is_ref_orthogonal:
-                try:
-                    ref_orientation = ants.get_orientation(ref)
-                    self.logger.info(f"  参考图像方向：{ref_orientation}")
+            img_rotation = extract_rotation(img_affine)
+            ref_rotation = extract_rotation(ref_affine)
 
-                    img_reoriented = ants.reorient_image2(img, ref_orientation)
-                    ants.image_write(img_reoriented, output_path)
-                    self.logger.info(f"  ✅ 重定向完成 (reorient_image2)：{output_path}")
-                    return output_path
-                except Exception as e:
-                    self.logger.warning(f"  reorient_image2 失败：{e}")
+            self.logger.info(f"  原始旋转矩阵:\n{img_rotation}")
+            self.logger.info(f"  参考旋转矩阵:\n{ref_rotation}")
 
-            # 方法 2：使用 resample_image 重采样到参考空间（推荐）
-            self.logger.info("  使用 resample_image 重采样到参考空间...")
-            try:
-                img_resampled = ants.resample_image(
-                    img,
-                    ref,  # 使用参考图像的几何信息
-                    interp_type='linear',  # 线性插值
-                    use_voxels=False  # 使用物理空间
-                )
-                ants.image_write(img_resampled, output_path)
-                self.logger.info(f"  ✅ 重采样完成：{output_path}")
-
-                # 验证结果
-                resampled = ants.image_read(output_path)
-                self.logger.info(f"  验证：输出方向矩阵形状 {resampled.direction.shape}")
-                if np.allclose(resampled.direction, ref_direction, atol=1e-4):
-                    self.logger.info(f"  ✅ 方向矩阵验证通过")
-                else:
-                    self.logger.warning(f"  ⚠️ 方向矩阵仍有差异")
-
+            # 检查旋转是否相同
+            if np.allclose(img_rotation, ref_rotation, atol=1e-4):
+                self.logger.info("  ✅ 旋转矩阵一致，无需修改方向")
+                shutil.copy(image_path, output_path)
                 return output_path
-            except Exception as e:
-                self.logger.error(f"  resample_image 失败：{e}")
 
-            # 方法 3：最终备用 - 复制原始文件
-            self.logger.warning(f"  ⚠️ 所有重定向方法失败，使用原始文件")
-            import shutil
-            shutil.copy(image_path, output_path)
+            # ← 关键：构建新的 Affine 矩阵
+            # 使用参考图像的旋转 + 原始图像的 spacing + 原始图像的 origin
+            img_origin = img_affine[:3, 3].copy()
+
+            # 构建新的旋转 - 缩放矩阵
+            new_zooms = np.diag(img_spacing)
+            new_rotation_scaled = np.dot(ref_rotation, new_zooms)
+
+            # 构建完整的 4x4 Affine 矩阵
+            new_affine = np.eye(4)
+            new_affine[:3, :3] = new_rotation_scaled
+            new_affine[:3, 3] = img_origin  # 保持原始 origin
+
+            self.logger.info(f"  新 Affine 矩阵:\n{new_affine}")
+            self.logger.info(f"  新 Spacing: {np.sqrt(np.sum(new_affine[:3, :3] ** 2, axis=0))}")
+
+            # 获取原始图像数据（不修改）
+            img_data = img_nii.get_fdata()
+
+            # 创建新的 NIfTI 图像，使用新的 Affine
+            new_nii = nib.Nifti1Image(img_data, new_affine, header=img_nii.header)
+            new_nii.header.set_data_dtype(img_nii.get_data_dtype())
+
+            # 保存新文件
+            nib.save(new_nii, output_path)
+
+            self.logger.info(f"  ✅ 方向修改完成：{output_path}")
+
+            # 验证结果
+            verify_nii = nib.load(output_path)
+            verify_affine = verify_nii.affine
+            verify_spacing = np.sqrt(np.sum(verify_affine[:3, :3] ** 2, axis=0))
+
+            self.logger.info(f"  验证：输出 Spacing: {verify_spacing}")
+            self.logger.info(f"  验证：输出 Shape: {verify_nii.shape}")
+
+            # 验证 spacing 是否保持不变
+            if np.allclose(verify_spacing, img_spacing, atol=1e-4):
+                self.logger.info(f"  ✅ Spacing 验证通过（保持不变）")
+            else:
+                self.logger.warning(f"  ⚠️ Spacing 发生变化！")
+
+            # 验证旋转是否与参考一致
+            verify_rotation = extract_rotation(verify_affine)
+            if np.allclose(verify_rotation, ref_rotation, atol=1e-4):
+                self.logger.info(f"  ✅ 旋转矩阵验证通过（与参考一致）")
+            else:
+                self.logger.warning(f"  ⚠️ 旋转矩阵仍有差异")
+
             return output_path
 
         except Exception as e:
-            self.logger.error(f"  ❌ 方向检查失败：{e}", exc_info=True)
+            self.logger.error(f"  ❌ 方向修改失败：{e}", exc_info=True)
             import shutil
             shutil.copy(image_path, output_path)
             return output_path
