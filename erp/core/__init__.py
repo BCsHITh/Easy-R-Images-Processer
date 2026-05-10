@@ -3,5 +3,6 @@
 """
 from erp.core.converter import DICOMConverter
 from erp.core.processor import StructuralProcessor
+from erp.core.functional import FunctionalProcessor
 
-__all__ = ['DICOMConverter', 'StructuralProcessor']
+__all__ = ['DICOMConverter', 'StructuralProcessor', 'FunctionalProcessor']
