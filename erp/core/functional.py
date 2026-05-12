@@ -174,6 +174,165 @@ class FunctionalProcessor:
     #     finally:
     #         self._cleanup_ants_image(template)
     #         self._cleanup_ants_image(resampled)
+    # def _resample_template(
+    #         self,
+    #         template_path: str,
+    #         target_resolution: float,
+    #         output_path: str,
+    #         progress_callback: Optional[Callable[[int, str], None]] = None
+    # ) -> str:
+    #     """
+    #     重采样模板到目标分辨率
+    #     使用 nibabel + scipy（保持正交方向矩阵）
+    #     """
+    #     self.logger.info(f"重采样模板：{target_resolution}mm 各向同性")
+    #
+    #     import nibabel as nib
+    #     from scipy.ndimage import zoom
+    #
+    #     try:
+    #         if progress_callback:
+    #             progress_callback(0, "重采样模板...")
+    #
+    #         # 标准化路径
+    #         template_path = str(Path(template_path).absolute())
+    #         output_path = str(Path(output_path).absolute())
+    #
+    #         self.logger.info(f"  输入：{template_path}")
+    #         self.logger.info(f"  输出：{output_path}")
+    #
+    #         # 读取模板
+    #         if progress_callback:
+    #             progress_callback(10, "读取模板...")
+    #
+    #         nii = nib.load(template_path)
+    #         data = np.asanyarray(nii.dataobj)  # 确保是 numpy 数组
+    #         original_affine = nii.affine.copy()
+    #         original_zooms = nii.header.get_zooms()[:3]
+    #
+    #         self.logger.info(f"  原始形状：{data.shape}")
+    #         self.logger.info(f"  原始分辨率：{original_zooms}")
+    #         self.logger.info(f"  原始 Affine:\n{original_affine}")
+    #
+    #         # ========== 关键修复：分解 Affine 矩阵 ==========
+    #         # Affine = 旋转 × 缩放 × 平移
+    #         # 我们需要保持旋转不变，只修改缩放
+    #
+    #         target_res = float(target_resolution)
+    #
+    #         # 计算缩放因子
+    #         scale_factors = tuple(float(z) / target_res for z in original_zooms)
+    #
+    #         self.logger.info(f"  缩放因子：{scale_factors}")
+    #         self.logger.info(f"  目标分辨率：{target_res}mm")
+    #
+    #         # 重采样
+    #         if progress_callback:
+    #             progress_callback(30, "执行重采样...")
+    #
+    #         resampled_data = zoom(data, scale_factors, order=1)
+    #
+    #         self.logger.info(f"  重采样后形状：{resampled_data.shape}")
+    #
+    #         # ========== 关键修复：创建新的正交 Affine ==========
+    #         # 方法：从原始 affine 提取旋转和平移，应用新的缩放
+    #
+    #         # 1. 提取平移（第 4 列前 3 个元素）
+    #         translation = original_affine[:3, 3].copy()
+    #
+    #         # 2. 提取旋转部分（前 3x3，去除缩放）
+    #         rotation = original_affine[:3, :3].copy()
+    #         for i in range(3):
+    #             norm = np.linalg.norm(rotation[:, i])
+    #             if norm > 1e-10:
+    #                 rotation[:, i] /= norm
+    #
+    #         self.logger.info(f"  旋转矩阵:\n{rotation}")
+    #
+    #         # 3. 验证旋转矩阵是否正交
+    #         identity_check = np.dot(rotation.T, rotation)
+    #         self.logger.info(f"  正交性检查 (应接近单位矩阵):\n{identity_check}")
+    #
+    #         if not np.allclose(identity_check, np.eye(3), atol=1e-3):
+    #             self.logger.warning(f"  ⚠️ 旋转矩阵不是严格正交，尝试正交化...")
+    #             # 使用 SVD 正交化
+    #             U, S, Vt = np.linalg.svd(rotation)
+    #             rotation = np.dot(U, Vt)
+    #
+    #         # 4. 创建新的缩放矩阵
+    #         new_zooms = np.diag([target_res, target_res, target_res])
+    #
+    #         # 5. 构建新的 Affine：旋转 × 新缩放 + 平移
+    #         new_affine = np.eye(4)
+    #         new_affine[:3, :3] = np.dot(rotation, new_zooms)
+    #         new_affine[:3, 3] = translation
+    #
+    #         self.logger.info(f"  新 Affine:\n{new_affine}")
+    #
+    #         # 6. 验证新 Affine 的方向余弦是否正交
+    #         new_direction = new_affine[:3, :3].copy()
+    #         for i in range(3):
+    #             norm = np.linalg.norm(new_direction[:, i])
+    #             if norm > 1e-10:
+    #                 new_direction[:, i] /= norm
+    #
+    #         ortho_check = np.dot(new_direction.T, new_direction)
+    #         self.logger.info(f"  新方向正交性检查:\n{ortho_check}")
+    #
+    #         if not np.allclose(ortho_check, np.eye(3), atol=1e-3):
+    #             self.logger.error(f"  ❌ 新 Affine 方向不是正交的！")
+    #             raise ValueError("无法创建正交方向矩阵")
+    #
+    #         # 创建新的 NIfTI 文件
+    #         if progress_callback:
+    #             progress_callback(80, "保存重采样模板...")
+    #
+    #         new_nii = nib.Nifti1Image(
+    #             resampled_data.astype(np.float32),
+    #             new_affine
+    #         )
+    #         new_nii.header.set_data_dtype(np.float32)
+    #
+    #         # 保存
+    #         nib.save(new_nii, output_path)
+    #
+    #         # 验证输出
+    #         verify_nii = nib.load(output_path)
+    #         verify_zooms = verify_nii.header.get_zooms()[:3]
+    #         verify_affine = verify_nii.affine
+    #
+    #         self.logger.info(f"  验证分辨率：{verify_zooms}")
+    #         self.logger.info(f"  验证形状：{verify_nii.shape}")
+    #         self.logger.info(f"  验证 Affine:\n{verify_affine}")
+    #
+    #         # 验证方向是否正交
+    #         verify_direction = verify_affine[:3, :3].copy()
+    #         for i in range(3):
+    #             norm = np.linalg.norm(verify_direction[:, i])
+    #             if norm > 1e-10:
+    #                 verify_direction[:, i] /= norm
+    #
+    #         verify_ortho = np.dot(verify_direction.T, verify_direction)
+    #         self.logger.info(f"  验证正交性:\n{verify_ortho}")
+    #
+    #         if np.allclose(verify_ortho, np.eye(3), atol=1e-3):
+    #             self.logger.info(f"  ✅ 方向矩阵正交性验证通过")
+    #         else:
+    #             self.logger.warning(f"  ⚠️ 方向矩阵正交性验证未通过")
+    #
+    #         self._close_nibabel_file(verify_nii)
+    #
+    #         if progress_callback:
+    #             progress_callback(100, "模板重采样完成")
+    #
+    #         self.logger.info(f"  ✅ 模板重采样完成")
+    #
+    #         return output_path
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"  ❌ 重采样失败：{e}", exc_info=True)
+    #         raise
+
     def _resample_template(
             self,
             template_path: str,
@@ -181,10 +340,7 @@ class FunctionalProcessor:
             output_path: str,
             progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> str:
-        """
-        重采样模板到目标分辨率
-        使用 nibabel + scipy（保持正交方向矩阵）
-        """
+        """重采样模板到目标分辨率（修复缩放因子和方向）"""
         self.logger.info(f"重采样模板：{target_resolution}mm 各向同性")
 
         import nibabel as nib
@@ -194,37 +350,26 @@ class FunctionalProcessor:
             if progress_callback:
                 progress_callback(0, "重采样模板...")
 
-            # 标准化路径
             template_path = str(Path(template_path).absolute())
             output_path = str(Path(output_path).absolute())
 
-            self.logger.info(f"  输入：{template_path}")
-            self.logger.info(f"  输出：{output_path}")
-
             # 读取模板
-            if progress_callback:
-                progress_callback(10, "读取模板...")
-
             nii = nib.load(template_path)
-            data = np.asanyarray(nii.dataobj)  # 确保是 numpy 数组
+            data = np.asanyarray(nii.dataobj)
             original_affine = nii.affine.copy()
             original_zooms = nii.header.get_zooms()[:3]
 
             self.logger.info(f"  原始形状：{data.shape}")
             self.logger.info(f"  原始分辨率：{original_zooms}")
-            self.logger.info(f"  原始 Affine:\n{original_affine}")
-
-            # ========== 关键修复：分解 Affine 矩阵 ==========
-            # Affine = 旋转 × 缩放 × 平移
-            # 我们需要保持旋转不变，只修改缩放
 
             target_res = float(target_resolution)
 
-            # 计算缩放因子
+            # ← 关键修复 1：正确的缩放因子计算
+            # 如果原始分辨率是 1mm，目标是 3mm，我们需要缩小到 1/3
+            # scale_factors = tuple(target_res / float(z) for z in original_zooms)
             scale_factors = tuple(float(z) / target_res for z in original_zooms)
 
             self.logger.info(f"  缩放因子：{scale_factors}")
-            self.logger.info(f"  目标分辨率：{target_res}mm")
 
             # 重采样
             if progress_callback:
@@ -234,92 +379,68 @@ class FunctionalProcessor:
 
             self.logger.info(f"  重采样后形状：{resampled_data.shape}")
 
-            # ========== 关键修复：创建新的正交 Affine ==========
-            # 方法：从原始 affine 提取旋转和平移，应用新的缩放
+            # ← 关键修复 2：正确构建正交 Affine
+            # 方法：保持原始旋转，只修改缩放
 
-            # 1. 提取平移（第 4 列前 3 个元素）
+            # 1. 提取平移
             translation = original_affine[:3, 3].copy()
 
-            # 2. 提取旋转部分（前 3x3，去除缩放）
+            # 2. 提取并正交化旋转矩阵
             rotation = original_affine[:3, :3].copy()
             for i in range(3):
                 norm = np.linalg.norm(rotation[:, i])
                 if norm > 1e-10:
                     rotation[:, i] /= norm
 
-            self.logger.info(f"  旋转矩阵:\n{rotation}")
+            # SVD 正交化（确保严格正交）
+            U, S, Vt = np.linalg.svd(rotation)
+            rotation = np.dot(U, Vt)
 
-            # 3. 验证旋转矩阵是否正交
-            identity_check = np.dot(rotation.T, rotation)
-            self.logger.info(f"  正交性检查 (应接近单位矩阵):\n{identity_check}")
+            # 3. 创建新缩放矩阵
+            new_zoom_matrix = np.diag([target_res, target_res, target_res])
 
-            if not np.allclose(identity_check, np.eye(3), atol=1e-3):
-                self.logger.warning(f"  ⚠️ 旋转矩阵不是严格正交，尝试正交化...")
-                # 使用 SVD 正交化
-                U, S, Vt = np.linalg.svd(rotation)
-                rotation = np.dot(U, Vt)
-
-            # 4. 创建新的缩放矩阵
-            new_zooms = np.diag([target_res, target_res, target_res])
-
-            # 5. 构建新的 Affine：旋转 × 新缩放 + 平移
+            # 4. 构建新 Affine：旋转 × 新缩放 + 平移
             new_affine = np.eye(4)
-            new_affine[:3, :3] = np.dot(rotation, new_zooms)
+            new_affine[:3, :3] = np.dot(rotation, new_zoom_matrix)
             new_affine[:3, 3] = translation
 
             self.logger.info(f"  新 Affine:\n{new_affine}")
 
-            # 6. 验证新 Affine 的方向余弦是否正交
+            # 验证正交性
             new_direction = new_affine[:3, :3].copy()
             for i in range(3):
                 norm = np.linalg.norm(new_direction[:, i])
                 if norm > 1e-10:
                     new_direction[:, i] /= norm
-
             ortho_check = np.dot(new_direction.T, new_direction)
-            self.logger.info(f"  新方向正交性检查:\n{ortho_check}")
 
             if not np.allclose(ortho_check, np.eye(3), atol=1e-3):
-                self.logger.error(f"  ❌ 新 Affine 方向不是正交的！")
+                self.logger.error(f"  ❌ 新方向矩阵不是正交的！")
                 raise ValueError("无法创建正交方向矩阵")
 
-            # 创建新的 NIfTI 文件
+            # ← 关键修复 3：创建新 NIfTI（显式指定数据类型）
             if progress_callback:
                 progress_callback(80, "保存重采样模板...")
 
+            # 创建新 header（不继承原始，避免类型冲突）
+            new_header = nib.Nifti1Header()
+            new_header.set_data_dtype(np.float32)
+            new_header['pixdim'][1:4] = target_res
+
             new_nii = nib.Nifti1Image(
-                resampled_data.astype(np.float32),
-                new_affine
+                resampled_data.astype(np.float32),  # 显式转换
+                new_affine,
+                header=new_header
             )
-            new_nii.header.set_data_dtype(np.float32)
 
             # 保存
             nib.save(new_nii, output_path)
 
             # 验证输出
             verify_nii = nib.load(output_path)
-            verify_zooms = verify_nii.header.get_zooms()[:3]
-            verify_affine = verify_nii.affine
-
-            self.logger.info(f"  验证分辨率：{verify_zooms}")
             self.logger.info(f"  验证形状：{verify_nii.shape}")
-            self.logger.info(f"  验证 Affine:\n{verify_affine}")
-
-            # 验证方向是否正交
-            verify_direction = verify_affine[:3, :3].copy()
-            for i in range(3):
-                norm = np.linalg.norm(verify_direction[:, i])
-                if norm > 1e-10:
-                    verify_direction[:, i] /= norm
-
-            verify_ortho = np.dot(verify_direction.T, verify_direction)
-            self.logger.info(f"  验证正交性:\n{verify_ortho}")
-
-            if np.allclose(verify_ortho, np.eye(3), atol=1e-3):
-                self.logger.info(f"  ✅ 方向矩阵正交性验证通过")
-            else:
-                self.logger.warning(f"  ⚠️ 方向矩阵正交性验证未通过")
-
+            self.logger.info(f"  验证分辨率：{verify_nii.header.get_zooms()[:3]}")
+            self.logger.info(f"  验证 Affine:\n{verify_nii.affine}")
             self._close_nibabel_file(verify_nii)
 
             if progress_callback:
@@ -587,6 +708,286 @@ class FunctionalProcessor:
     #
     #         gc.collect()
     #         self.logger.info("  资源清理完成")
+    # def apply_transform_to_bold(
+    #         self,
+    #         bold_path: str,
+    #         transform_prefix: str,
+    #         template_path: str,
+    #         output_path: str,
+    #         target_resolution: Optional[float] = None,
+    #         progress_callback: Optional[Callable[[int, str], None]] = None
+    # ) -> Dict:
+    #     """应用变换到 4D BOLD 数据（添加数据验证）"""
+    #     self.logger.info(f"应用变换到 4D BOLD: {bold_path}")
+    #
+    #     bold_nii_check = nib.load(bold_path)
+    #     bold_orientation = ''.join(nib.orientations.aff2axcodes(bold_nii_check.affine))
+    #
+    #     template_nii_check = nib.load(template_path)
+    #     template_orientation = ''.join(nib.orientations.aff2axcodes(template_nii_check.affine))
+    #
+    #     self.logger.info(f"  BOLD 方向：{bold_orientation}")
+    #     self.logger.info(f"  模板方向：{template_orientation}")
+    #
+    #     self._close_nibabel_file(bold_nii_check)
+    #     self._close_nibabel_file(template_nii_check)
+    #
+    #     # 如果方向不一致，警告用户
+    #     if bold_orientation != template_orientation:
+    #         self.logger.warning(f"  ⚠️ BOLD 和模板方向不一致！")
+    #         self.logger.warning(f"  建议先统一方向到 RAS 或 LPI")
+    #
+    #     bold_nii = None
+    #     template_nii = None
+    #     template = None
+    #     transformed_data = None
+    #
+    #     try:
+    #         # ========== 1-5. 前置处理（不变） ==========
+    #         bold_path = str(Path(bold_path).absolute())
+    #         template_path = str(Path(template_path).absolute())
+    #         output_path = str(Path(output_path).absolute())
+    #         transform_prefix = str(Path(transform_prefix).absolute())
+    #
+    #         template_nii = nib.load(template_path)
+    #         template_zooms = template_nii.header.get_zooms()[:3]
+    #         current_resolution = min(template_zooms)
+    #
+    #         actual_template_path = template_path
+    #
+    #         if target_resolution:
+    #             target_res = float(target_resolution)
+    #             if current_resolution < target_res:
+    #                 self.logger.info(f"  模板分辨率 ({current_resolution:.1f}mm) 高于目标 ({target_res:.1f}mm)")
+    #
+    #                 template_dir = Path(template_path).parent
+    #                 resampled_name = f"template_{target_res:.1f}mm.nii.gz"
+    #                 resampled_template_path = str(template_dir / resampled_name)
+    #
+    #                 if not Path(resampled_template_path).exists():
+    #                     self._resample_template(
+    #                         template_path, target_res, resampled_template_path,
+    #                         progress_callback=lambda v, t: progress_callback(int(v * 5 / 100),
+    #                                                                          t) if progress_callback else None
+    #                     )
+    #
+    #                 self._close_nibabel_file(template_nii)
+    #                 template_nii = nib.load(resampled_template_path)
+    #                 template_zooms = template_nii.header.get_zooms()[:3]
+    #                 actual_template_path = resampled_template_path
+    #
+    #         template = ants.image_read(actual_template_path)
+    #         template_affine = template_nii.affine.copy()
+    #         template_shape = template_nii.shape[:3]
+    #
+    #         self._close_nibabel_file(template_nii)
+    #         template_nii = None
+    #
+    #         bold_nii = nib.load(bold_path)
+    #         bold_dataobj = bold_nii.dataobj
+    #         n_timepoints = bold_dataobj.shape[3]
+    #
+    #         self.logger.info(f"  时间点数：{n_timepoints}")
+    #
+    #         transform_files = []
+    #         for suffix in ['_affine.mat', '_warp.nii.gz']:
+    #             tf = f"{transform_prefix}{suffix}"
+    #             if Path(tf).exists():
+    #                 transform_files.append(str(Path(tf).absolute()))
+    #
+    #         if not transform_files:
+    #             raise ValueError(f"未找到变换文件：{transform_prefix}*")
+    #
+    #         time.sleep(0.5)
+    #
+    #         # ========== 6. 预分配数组 ==========
+    #         self.logger.info(f"  分配输出数组：{template_shape + (n_timepoints,)}")
+    #
+    #         transformed_data = np.zeros(
+    #             template_shape + (n_timepoints,),
+    #             dtype=np.float32
+    #         )
+    #
+    #         # ========== 7. 流式处理（添加验证） ==========
+    #         valid_voxel_count = 0
+    #         total_voxel_count = 0
+    #
+    #         for i in range(n_timepoints):
+    #             if progress_callback:
+    #                 progress_callback(10 + int(80 * i / n_timepoints), f"变换时间点 {i + 1}/{n_timepoints}...")
+    #
+    #             try:
+    #                 volume_data = np.asarray(bold_dataobj[:, :, :, i]).astype(np.float32)
+    #
+    #                 # ← 关键：检查原始数据
+    #                 if np.isnan(volume_data).any() or np.isinf(volume_data).any():
+    #                     self.logger.warning(f"  时间点 {i}: 原始数据包含 NaN/Inf，清理中...")
+    #                     volume_data = np.nan_to_num(volume_data, nan=0.0, posinf=0.0, neginf=0.0)
+    #
+    #                 origin_3d = list(bold_nii.header.get_best_affine()[:3, 3])
+    #                 spacing_3d = list(bold_nii.header.get_zooms()[:3])
+    #                 direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)
+    #
+    #                 volume_img = ants.from_numpy(
+    #                     volume_data,
+    #                     origin=origin_3d,
+    #                     spacing=spacing_3d,
+    #                     direction=direction_3d
+    #                 )
+    #                 del volume_data
+    #
+    #                 transformed_img = ants.apply_transforms(
+    #                     fixed=template,
+    #                     moving=volume_img,
+    #                     transformlist=transform_files,
+    #                     interpolator='linear',
+    #                     verbose=False
+    #                 )
+    #
+    #                 transformed_vol = transformed_img.numpy()
+    #
+    #                 # ← 关键：检查变换后数据
+    #                 if np.isnan(transformed_vol).any() or np.isinf(transformed_vol).any():
+    #                     self.logger.warning(f"  时间点 {i}: 变换后包含 NaN/Inf，清理中...")
+    #                     transformed_vol = np.nan_to_num(transformed_vol, nan=0.0, posinf=0.0, neginf=0.0)
+    #
+    #                 # ← 关键：检查有效体素比例
+    #                 non_zero_ratio = np.sum(transformed_vol > 0) / transformed_vol.size
+    #                 if i == 0:
+    #                     self.logger.info(f"  时间点 0: 有效体素比例 {non_zero_ratio * 100:.1f}%")
+    #
+    #                 if non_zero_ratio < 0.01:  # 少于 1% 有效体素
+    #                     self.logger.error(f"  时间点 {i}: 有效体素比例过低 ({non_zero_ratio * 100:.2f}%)，配准可能失败！")
+    #
+    #                 transformed_data[:, :, :, i] = transformed_vol
+    #
+    #                 # 统计
+    #                 if i == 0:
+    #                     valid_voxel_count = np.sum(transformed_vol > 0)
+    #                     total_voxel_count = transformed_vol.size
+    #
+    #                 del transformed_vol
+    #                 self._cleanup_ants_image(transformed_img)
+    #                 self._cleanup_ants_image(volume_img)
+    #
+    #                 if i % 20 == 0:
+    #                     gc.collect()
+    #
+    #             except Exception as e:
+    #                 self.logger.error(f"  时间点 {i} 变换失败：{e}")
+    #                 transformed_data[:, :, :, i] = 0
+    #                 gc.collect()
+    #
+    #         # ========== 8. 最终数据验证 ==========
+    #         self.logger.info(f"  最终数据验证...")
+    #
+    #         # 检查整体统计
+    #         mean_val = np.mean(transformed_data)
+    #         std_val = np.std(transformed_data)
+    #         max_val = np.max(transformed_data)
+    #         min_val = np.min(transformed_data)
+    #         nan_count = np.isnan(transformed_data).sum()
+    #         inf_count = np.isinf(transformed_data).sum()
+    #         zero_ratio = np.sum(transformed_data == 0) / transformed_data.size
+    #
+    #         self.logger.info(f"  平均值：{mean_val:.2f}")
+    #         self.logger.info(f"  标准差：{std_val:.2f}")
+    #         self.logger.info(f"  最大值：{max_val:.2f}")
+    #         self.logger.info(f"  最小值：{min_val:.2f}")
+    #         self.logger.info(f"  NaN 数量：{nan_count}")
+    #         self.logger.info(f"  Inf 数量：{inf_count}")
+    #         self.logger.info(f"  零值比例：{zero_ratio * 100:.1f}%")
+    #
+    #         # ← 关键：如果数据异常，发出警告
+    #         if nan_count > 0 or inf_count > 0:
+    #             self.logger.error(f"  ❌ 数据包含 NaN/Inf，输出可能无效！")
+    #
+    #         if zero_ratio > 0.99:
+    #             self.logger.error(f"  ❌ 99% 以上体素为零，配准可能完全失败！")
+    #
+    #         if max_val > 10000 or max_val < 100:
+    #             self.logger.warning(f"  ⚠️ 数据范围异常，可能需要重新检查配准")
+    #
+    #         # 清理 NaN/Inf
+    #         if nan_count > 0 or inf_count > 0:
+    #             self.logger.info(f"  清理 NaN/Inf...")
+    #             transformed_data = np.nan_to_num(transformed_data, nan=0.0, posinf=0.0, neginf=0.0)
+    #
+    #         # ========== 9. 创建并保存 NIfTI ==========
+    #         self.logger.info(f"  创建 NIfTI 图像...")
+    #
+    #         # output_header = nib.Nifti1Header()
+    #         # output_header.set_data_dtype(np.float32)
+    #         # output_header['pixdim'][1:4] = template_zooms
+    #         #
+    #         # output_img = nib.Nifti1Image(
+    #         #     transformed_data,
+    #         #     template_affine,
+    #         #     header=output_header
+    #         # )
+    #         #
+    #         # self.logger.info(f"  保存到：{output_path}")
+    #         # nib.save(output_img, output_path)
+    #         #
+    #         # # 验证输出
+    #         # verify_nii = nib.load(output_path)
+    #         # verify_data = verify_nii.get_fdata()
+    #         # self.logger.info(f"  验证输出：{verify_nii.shape}")
+    #         # self.logger.info(f"  验证范围：{verify_data.min():.2f} - {verify_data.max():.2f}")
+    #         # self._close_nibabel_file(verify_nii)
+    #         output_header = nib.Nifti1Header()
+    #         output_header.set_data_dtype(np.float32)  # 先设置类型
+    #         output_header['pixdim'][1:4] = template_zooms
+    #
+    #         # 显式转换数据为 float32
+    #         transformed_data_f32 = transformed_data.astype(np.float32)
+    #
+    #         output_img = nib.Nifti1Image(
+    #             transformed_data_f32,  # 使用 float32 数据
+    #             template_affine,
+    #             header=output_header
+    #         )
+    #         # 再次确认类型
+    #         output_img.header.set_data_dtype(np.float32)
+    #
+    #         self.logger.info(f"  保存到：{output_path}")
+    #         nib.save(output_img, output_path)
+    #
+    #         # 验证
+    #         verify_nii = nib.load(output_path)
+    #         self.logger.info(f"  验证数据类型：{verify_nii.get_data_dtype()}")
+    #         self.logger.info(f"  验证形状：{verify_nii.shape}")
+    #         self._close_nibabel_file(verify_nii)
+    #
+    #         if progress_callback:
+    #             progress_callback(100, "变换应用完成")
+    #
+    #         self.logger.info(f"  ✅ 完成：{output_path}")
+    #
+    #         return {
+    #             "success": True,
+    #             "output_path": output_path,
+    #             "n_timepoints": n_timepoints,
+    #             "data_mean": mean_val,
+    #             "data_max": max_val,
+    #             "zero_ratio": zero_ratio
+    #         }
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"  ❌ 处理失败：{e}", exc_info=True)
+    #         raise
+    #
+    #     finally:
+    #         if transformed_data is not None:
+    #             del transformed_data
+    #         if template is not None:
+    #             self._cleanup_ants_image(template)
+    #         if bold_nii is not None:
+    #             self._close_nibabel_file(bold_nii)
+    #         if template_nii is not None:
+    #             self._close_nibabel_file(template_nii)
+    #         gc.collect()
+
     def apply_transform_to_bold(
             self,
             bold_path: str,
@@ -596,21 +997,23 @@ class FunctionalProcessor:
             target_resolution: Optional[float] = None,
             progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict:
-        """应用变换到 4D BOLD 数据（修复文件类型错误）"""
+        """应用变换到 4D BOLD 数据（完整修复版）"""
         self.logger.info(f"应用变换到 4D BOLD: {bold_path}")
 
-        # 初始化所有清理变量
-        # ← 关键修复：在函数开头初始化所有清理变量为 None
+        # ← 关键：在函数开头初始化 ALL 变量为 None
         bold_nii = None
         template_nii = None
         template = None
         transformed_data = None
-        resampled_template_path = None
-        volume_img = None
-        transformed_img = None
-        temp_img = None
-        final_img = None
         output_img = None
+
+        # 临时文件路径
+        bold_reoriented_path = None
+        template_downsampled_path = None
+        template_reoriented_path = None
+
+        # ← 关键：定义 bold_path_for_transform，初始值为原始路径
+        bold_path_for_transform = bold_path
 
         try:
             # ========== 1. 标准化路径 ==========
@@ -619,58 +1022,103 @@ class FunctionalProcessor:
             output_path = str(Path(output_path).absolute())
             transform_prefix = str(Path(transform_prefix).absolute())
 
-            # ========== 2. 检查分辨率并重采样 ==========
-            template_nii = nib.load(template_path)
-            template_zooms = template_nii.header.get_zooms()[:3]
-            current_resolution = min(template_zooms)
+            # ========== 2. 检查模板分辨率并降采样 ==========
+            template_nii_check = nib.load(template_path)
+            template_zooms = template_nii_check.header.get_zooms()[:3]
+            template_orientation = ''.join(nib.orientations.aff2axcodes(template_nii_check.affine))
+            min_template_res = min(template_zooms)
 
-            actual_template_path = template_path
+            self.logger.info(f"  模板分辨率：{template_zooms}")
+            self.logger.info(f"  模板方向：{template_orientation}")
+            self.logger.info(f"  模板形状：{template_nii_check.shape}")
 
             if target_resolution:
                 target_res = float(target_resolution)
 
-                if current_resolution < target_res:
-                    self.logger.info(f"  模板分辨率 ({current_resolution:.1f}mm) 高于目标 ({target_res:.1f}mm)")
-                    self.logger.info(f"  正在重采样模板...")
+                if min_template_res < target_res * 0.8:
+                    self.logger.info(f"  模板分辨率 ({min_template_res:.2f}mm) 高于目标 ({target_res:.2f}mm)")
+                    self.logger.info(f"  自动降采样模板...")
 
                     template_dir = Path(template_path).parent
-                    resampled_name = f"template_{target_res:.1f}mm.nii.gz"
-                    resampled_template_path = str(template_dir / resampled_name)
+                    downsampled_name = f"template_{target_res:.1f}mm.nii.gz"
+                    template_downsampled_path = str(template_dir / downsampled_name)
 
-                    if not Path(resampled_template_path).exists():
-                        self._resample_template(
+                    if not Path(template_downsampled_path).exists():
+                        self._downsample_template(
                             template_path,
                             target_res,
-                            resampled_template_path,
+                            template_downsampled_path,
                             progress_callback=lambda v, t: progress_callback(int(v * 5 / 100),
                                                                              t) if progress_callback else None
                         )
                     else:
-                        self.logger.info(f"  重采样模板已存在，跳过")
+                        self.logger.info(f"  降采样模板已存在，跳过")
 
-                    self._close_nibabel_file(template_nii)
-                    template_nii = nib.load(resampled_template_path)
-                    template_zooms = template_nii.header.get_zooms()[:3]
-                    actual_template_path = resampled_template_path
+                    self._close_nibabel_file(template_nii_check)
+                    template_nii_check = nib.load(template_downsampled_path)
+                    template_zooms = template_nii_check.header.get_zooms()[:3]
+                    template_orientation = ''.join(nib.orientations.aff2axcodes(template_nii_check.affine))
 
-            # ========== 3. 读取模板为 ANTs 图像 ==========
-            template = ants.image_read(actual_template_path)
+                    self.logger.info(f"  ✅ 使用降采样模板：{template_downsampled_path}")
+
+            self._close_nibabel_file(template_nii_check)
+            template_nii_check = None
+
+            # ========== 3. 统一模板方向到 LIP ==========
+            template_path_for_transform = template_path
+            if template_downsampled_path:
+                template_path_for_transform = template_downsampled_path
+
+            template_nii_temp = nib.load(template_path_for_transform)
+            temp_orientation = ''.join(nib.orientations.aff2axcodes(template_nii_temp.affine))
+            self._close_nibabel_file(template_nii_temp)
+
+            if temp_orientation != "LIP":
+                self.logger.info(f"  重定向模板到 LIP...")
+                template_reoriented_path = str(
+                    Path(template_path_for_transform).parent / f"template_LIP_{os.getpid()}.nii.gz")
+                self._reorient_to_LIP(template_path_for_transform, template_reoriented_path)
+                template_path_for_transform = template_reoriented_path
+
+            # ========== 4. 统一 BOLD 方向到 LIP ==========
+            bold_nii_check = nib.load(bold_path)
+            bold_orientation = ''.join(nib.orientations.aff2axcodes(bold_nii_check.affine))
+            self.logger.info(f"  BOLD 原始方向：{bold_orientation}")
+            self._close_nibabel_file(bold_nii_check)
+
+            if bold_orientation != "LIP":
+                self.logger.info(f"  重定向 BOLD 到 LIP...")
+                bold_reoriented_path = str(Path(bold_path).parent / f"bold_LIP_{os.getpid()}.nii.gz")
+                self._reorient_to_LIP(bold_path, bold_reoriented_path)
+                bold_path_for_transform = bold_reoriented_path  # ← 关键：更新路径
+                self.logger.info(f"  ✅ BOLD 已重定向到 LIP")
+            else:
+                self.logger.info(f"  ✅ BOLD 已是 LIP 方向")
+
+            # ========== 5. 加载模板 ==========
+            template_nii = nib.load(template_path_for_transform)
             template_affine = template_nii.affine.copy()
             template_shape = template_nii.shape[:3]
+            template_zooms = template_nii.header.get_zooms()[:3]
+
+            template = ants.image_read(template_path_for_transform)
+
+            self.logger.info(f"  最终模板方向：{''.join(nib.orientations.aff2axcodes(template_nii.affine))}")
+            self.logger.info(f"  最终模板形状：{template_shape}")
+            self.logger.info(f"  最终模板分辨率：{template_zooms}")
 
             self._close_nibabel_file(template_nii)
             template_nii = None
 
-            self.logger.info(f"  目标空间：{template_shape}, {template_zooms}")
-
-            # ========== 4. 加载 BOLD ==========
-            bold_nii = nib.load(bold_path)
+            # ========== 6. 加载 BOLD ==========
+            bold_nii = nib.load(bold_path_for_transform)  # ← 使用重定向后的路径
             bold_dataobj = bold_nii.dataobj
             n_timepoints = bold_dataobj.shape[3]
 
+            self.logger.info(f"  BOLD 形状：{bold_dataobj.shape}")
             self.logger.info(f"  时间点数：{n_timepoints}")
 
-            # ========== 5. 验证变换文件 ==========
+            # ========== 7. 验证变换文件 ==========
             transform_files = []
             for suffix in ['_affine.mat', '_warp.nii.gz']:
                 tf = f"{transform_prefix}{suffix}"
@@ -682,17 +1130,15 @@ class FunctionalProcessor:
 
             time.sleep(0.5)
 
-            # ========== 6. 关键修复：预分配 numpy 数组（不用 memmap） ==========
+            # ========== 8. 预分配数组 ==========
             self.logger.info(f"  分配输出数组：{template_shape + (n_timepoints,)}")
 
-            # 使用 numpy 数组而不是 memmap
-            # 对于 3mm 模板，通常内存足够（约 1-2GB）
             transformed_data = np.zeros(
                 template_shape + (n_timepoints,),
                 dtype=np.float32
             )
 
-            # ========== 7. 流式处理 ==========
+            # ========== 9. 流式处理 ==========
             volume_img = None
             transformed_img = None
 
@@ -726,16 +1172,18 @@ class FunctionalProcessor:
                         verbose=False
                     )
 
+                    transformed_vol = transformed_img.numpy()
+
+                    if np.isnan(transformed_vol).any() or np.isinf(transformed_vol).any():
+                        transformed_vol = np.nan_to_num(transformed_vol, nan=0.0, posinf=0.0, neginf=0.0)
+
+                    transformed_data[:, :, :, i] = transformed_vol
+
                     self._cleanup_ants_image(volume_img)
                     volume_img = None
-
-                    # 直接写入 numpy 数组
-                    transformed_data[:, :, :, i] = transformed_img.numpy()
-
                     self._cleanup_ants_image(transformed_img)
                     transformed_img = None
 
-                    # 定期清理内存
                     if i % 20 == 0:
                         gc.collect()
 
@@ -744,36 +1192,28 @@ class FunctionalProcessor:
                     transformed_data[:, :, :, i] = 0
                     gc.collect()
 
-            # ========== 8. 关键修复：正确创建并保存 NIfTI 文件 ==========
+            # ========== 10. 创建并保存 NIfTI ==========
             self.logger.info(f"  创建 NIfTI 图像...")
 
-            # 创建输出 header
             output_header = nib.Nifti1Header()
             output_header.set_data_dtype(np.float32)
             output_header['pixdim'][1:4] = template_zooms
 
-            # 创建 NIfTI 图像对象
             output_img = nib.Nifti1Image(
                 transformed_data,
                 template_affine,
                 header=output_header
             )
 
-            # ← 关键修复：使用 nib.save 直接保存（自动处理 .nii 或 .nii.gz）
             self.logger.info(f"  保存到：{output_path}")
             nib.save(output_img, output_path)
 
-            # 清理
-            del transformed_data
-            del output_img
-            gc.collect()
-
-            # 验证输出文件
-            if not Path(output_path).exists():
-                raise RuntimeError(f"输出文件保存失败：{output_path}")
-
+            # 验证输出
             verify_nii = nib.load(output_path)
-            self.logger.info(f"  验证输出：{verify_nii.shape}, {verify_nii.header.get_zooms()[:3]}")
+            verify_orientation = ''.join(nib.orientations.aff2axcodes(verify_nii.affine))
+            self.logger.info(f"  验证方向：{verify_orientation}")
+            self.logger.info(f"  验证形状：{verify_nii.shape}")
+            self.logger.info(f"  验证分辨率：{verify_nii.header.get_zooms()[:3]}")
             self._close_nibabel_file(verify_nii)
 
             if progress_callback:
@@ -784,63 +1224,228 @@ class FunctionalProcessor:
             return {
                 "success": True,
                 "output_path": output_path,
-                "n_timepoints": n_timepoints
+                "n_timepoints": n_timepoints,
+                "orientation": verify_orientation
             }
 
-
         except Exception as e:
-
             self.logger.error(f"  ❌ 处理失败：{e}", exc_info=True)
-
             raise
 
+        finally:
+            self.logger.info("  清理资源...")
 
-        # finally:
-        #
-        #     # ← 关键修复：清理前检查是否为 None
-        #
-        #     self.logger.info("  清理资源...")
-        #
-        #     if transformed_data is not None:
-        #         del transformed_data
-        #
-        #     if output_img is not None:
-        #         del output_img
-        #
-        #     if template is not None:
-        #         self._cleanup_ants_image(template)
-        #
-        #     if volume_img is not None:
-        #         self._cleanup_ants_image(volume_img)
-        #
-        #     if transformed_img is not None:
-        #         self._cleanup_ants_image(transformed_img)
-        #
-        #     if bold_nii is not None:
-        #         self._close_nibabel_file(bold_nii)
-        #
-        #     if template_nii is not None:
-        #         self._close_nibabel_file(template_nii)
-        #
-        #     if temp_img is not None:
-        #         self._close_nibabel_file(temp_img)
-        #
-        #     if final_img is not None:
-        #         self._close_nibabel_file(final_img)
-        #
-        #     if resampled_template_path and not os.path.exists(output_path):
-        #
-        #         try:
-        #
-        #             os.remove(resampled_template_path)
-        #
-        #         except:
-        #
-        #             pass
-        #
-        #     gc.collect()
-        #
-        #     self.logger.info("  资源清理完成")
+            # 清理临时文件（保留降采样模板以便复用）
+            if bold_reoriented_path and os.path.exists(bold_reoriented_path):
+                try:
+                    os.remove(bold_reoriented_path)
+                    self.logger.info(f"  清理临时文件：{bold_reoriented_path}")
+                except:
+                    pass
+
+            if template_reoriented_path and os.path.exists(template_reoriented_path):
+                try:
+                    os.remove(template_reoriented_path)
+                    self.logger.info(f"  清理临时文件：{template_reoriented_path}")
+                except:
+                    pass
+
+            # 不删除降采样模板（可以复用）
+            # if template_downsampled_path and ...
+
+            if transformed_data is not None:
+                del transformed_data
+            if output_img is not None:
+                del output_img
+            if template is not None:
+                self._cleanup_ants_image(template)
+            if bold_nii is not None:
+                self._close_nibabel_file(bold_nii)
+            if template_nii is not None:
+                self._close_nibabel_file(template_nii)
+
+            gc.collect()
+            self.logger.info("  资源清理完成")
+
+    # def motion_correction(
+    #         self,
+    #         bold_path: str,
+    #         output_path: str,
+    #         reference_volume: int = 0,
+    #         progress_callback: Optional[Callable[[int, str], None]] = None
+    # ) -> Dict:
+    #     """运动校正"""
+    #     self.logger.info(f"运动校正：{bold_path}")
+    #
+    #     import tempfile
+    #     import os
+    #
+    #     bold_nii_reoriented = None
+    #     temp_reoriented_path = None
+    #
+    #     # ← 关键：在函数最开始初始化 ALL 变量为 None
+    #     bold_nii = None
+    #     reference_img = None
+    #     volume_img = None
+    #     corrected_data = None
+    #     output_img = None
+    #
+    #     reg = None
+    #
+    #     try:
+    #         bold_nii_check = nib.load(bold_path)
+    #         bold_orientation = ''.join(nib.orientations.aff2axcodes(bold_nii_check.affine))
+    #         self.logger.info(f"  原始 BOLD 方向：{bold_orientation}")
+    #         self._close_nibabel_file(bold_nii_check)
+    #
+    #         # 如果不是 RAS，重定向
+    #         if bold_orientation != "RAS":
+    #             self.logger.info(f"  重定向到 RAS 方向...")
+    #
+    #             # 创建临时文件
+    #             temp_dir = Path(bold_path).parent
+    #             temp_reoriented_path = str(temp_dir / f"bold_reoriented_{os.getpid()}.nii.gz")
+    #
+    #             self._reorient_to_standard(
+    #                 bold_path,
+    #                 temp_reoriented_path,
+    #                 target_orientation="RAS"
+    #             )
+    #
+    #             bold_path_for_mc = temp_reoriented_path
+    #         else:
+    #             bold_path_for_mc = bold_path
+    #
+    #         if progress_callback:
+    #             progress_callback(0, "加载 4D BOLD 数据...")
+    #
+    #         bold_nii = nib.load(bold_path)
+    #         bold_dataobj = bold_nii.dataobj
+    #
+    #         if len(bold_dataobj.shape) != 4:
+    #             raise ValueError(f"BOLD 数据必须是 4D，当前形状：{bold_dataobj.shape}")
+    #
+    #         n_timepoints = bold_dataobj.shape[3]
+    #         self.logger.info(f"  时间点数：{n_timepoints}")
+    #
+    #         # 获取几何信息
+    #         origin_3d = list(bold_nii.header.get_best_affine()[:3, 3])
+    #         spacing_3d = list(bold_nii.header.get_zooms()[:3])
+    #         direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)
+    #
+    #         # 提取参考体积
+    #         if progress_callback:
+    #             progress_callback(10, f"提取参考体积 (时间点 {reference_volume})...")
+    #
+    #         reference_data = np.asarray(bold_dataobj[:, :, :, reference_volume]).astype(np.float32)
+    #         reference_img = ants.from_numpy(
+    #             reference_data,
+    #             origin=origin_3d,
+    #             spacing=spacing_3d,
+    #             direction=direction_3d
+    #         )
+    #         del reference_data
+    #         gc.collect()
+    #
+    #         # 分配输出数组
+    #         self.logger.info(f"  分配输出数组...")
+    #
+    #         corrected_data = np.zeros(
+    #             (bold_dataobj.shape[0], bold_dataobj.shape[1], bold_dataobj.shape[2], n_timepoints),
+    #             dtype=np.float32
+    #         )
+    #
+    #         # 对每个时间点进行配准
+    #         for i in range(n_timepoints):
+    #             if progress_callback:
+    #                 progress_callback(10 + int(80 * i / n_timepoints), f"校正时间点 {i + 1}/{n_timepoints}...")
+    #
+    #             try:
+    #                 volume_img = None
+    #
+    #                 volume_data = np.asarray(bold_dataobj[:, :, :, i]).astype(np.float32)
+    #                 volume_img = ants.from_numpy(
+    #                     volume_data,
+    #                     origin=origin_3d,
+    #                     spacing=spacing_3d,
+    #                     direction=direction_3d
+    #                 )
+    #                 del volume_data
+    #
+    #                 if i == reference_volume:
+    #                     corrected_data[:, :, :, i] = volume_img.numpy()
+    #                 else:
+    #                     reg = ants.registration(
+    #                         fixed=reference_img,
+    #                         moving=volume_img,
+    #                         type_of_transform='Rigid',
+    #                         metric='CC',
+    #                         verbose=False
+    #                     )
+    #                     corrected_data[:, :, :, i] = reg['warpedmovout'].numpy()
+    #
+    #                 if volume_img is not None:
+    #                     self._cleanup_ants_image(volume_img)
+    #                     volume_img = None
+    #
+    #                 if i % 50 == 0:
+    #                     gc.collect()
+    #
+    #             except Exception as e:
+    #                 self.logger.warning(f"  时间点 {i} 配准失败：{e}，使用原始数据")
+    #                 volume_data = np.asarray(bold_dataobj[:, :, :, i]).astype(np.float32)
+    #                 corrected_data[:, :, :, i] = volume_data
+    #                 del volume_data
+    #                 gc.collect()
+    #
+    #         # 创建 NIfTI 图像
+    #         self.logger.info(f"  创建 NIfTI 图像...")
+    #
+    #         output_img = nib.Nifti1Image(
+    #             corrected_data,
+    #             bold_nii.affine,
+    #             header=bold_nii.header
+    #         )
+    #         output_img.header.set_data_dtype(np.float32)
+    #
+    #         nib.save(output_img, output_path)
+    #
+    #         if progress_callback:
+    #             progress_callback(100, "运动校正完成")
+    #
+    #         self.logger.info(f"  运动校正完成：{output_path}")
+    #
+    #         return {
+    #             "success": True,
+    #             "output_path": output_path,
+    #             "n_timepoints": n_timepoints,
+    #             "reference_volume": reference_volume
+    #         }
+    #
+    #     except Exception as e:
+    #         self.logger.error(f"  ❌ 运动校正失败：{e}", exc_info=True)
+    #         raise
+    #
+    #     finally:
+    #         # ← 关键：使用 locals() 检查变量是否存在
+    #         local_vars = locals()
+    #
+    #         if 'corrected_data' in local_vars and corrected_data is not None:
+    #             del corrected_data
+    #
+    #         if 'output_img' in local_vars and output_img is not None:
+    #             del output_img
+    #
+    #         if 'reference_img' in local_vars and reference_img is not None:
+    #             self._cleanup_ants_image(reference_img)
+    #
+    #         if 'volume_img' in local_vars and volume_img is not None:
+    #             self._cleanup_ants_image(volume_img)
+    #
+    #         if 'bold_nii' in local_vars and bold_nii is not None:
+    #             self._close_nibabel_file(bold_nii)
+    #
+    #         gc.collect()
 
     def motion_correction(
             self,
@@ -849,23 +1454,35 @@ class FunctionalProcessor:
             reference_volume: int = 0,
             progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict:
-        """运动校正"""
+        """运动校正（强制统一方向到 LIP）"""
         self.logger.info(f"运动校正：{bold_path}")
 
-        # ← 关键：在函数最开始初始化 ALL 变量为 None
         bold_nii = None
         reference_img = None
         volume_img = None
         corrected_data = None
         output_img = None
 
-        reg = None
+        # ← 新增：临时重定向文件
+        bold_reoriented_path = None
 
         try:
-            if progress_callback:
-                progress_callback(0, "加载 4D BOLD 数据...")
+            # ========== 1. 统一方向到 LIP ==========
+            bold_nii_check = nib.load(bold_path)
+            bold_orientation = ''.join(nib.orientations.aff2axcodes(bold_nii_check.affine))
+            self.logger.info(f"  原始 BOLD 方向：{bold_orientation}")
+            self._close_nibabel_file(bold_nii_check)
 
-            bold_nii = nib.load(bold_path)
+            if bold_orientation != "LIP":
+                self.logger.info(f"  重定向到 LIP...")
+                bold_reoriented_path = str(Path(bold_path).parent / f"bold_reoriented_{os.getpid()}.nii.gz")
+                self._reorient_to_LIP(bold_path, bold_reoriented_path)
+                bold_path_for_mc = bold_reoriented_path
+            else:
+                bold_path_for_mc = bold_path
+
+            # ========== 2. 加载重定向后的 BOLD ==========
+            bold_nii = nib.load(bold_path_for_mc)
             bold_dataobj = bold_nii.dataobj
 
             if len(bold_dataobj.shape) != 4:
@@ -873,13 +1490,14 @@ class FunctionalProcessor:
 
             n_timepoints = bold_dataobj.shape[3]
             self.logger.info(f"  时间点数：{n_timepoints}")
+            self.logger.info(f"  原始形状：{bold_dataobj.shape}")
 
             # 获取几何信息
             origin_3d = list(bold_nii.header.get_best_affine()[:3, 3])
             spacing_3d = list(bold_nii.header.get_zooms()[:3])
             direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)
 
-            # 提取参考体积
+            # ========== 3. 提取参考体积 ==========
             if progress_callback:
                 progress_callback(10, f"提取参考体积 (时间点 {reference_volume})...")
 
@@ -891,9 +1509,8 @@ class FunctionalProcessor:
                 direction=direction_3d
             )
             del reference_data
-            gc.collect()
 
-            # 分配输出数组
+            # ========== 4. 分配输出数组 ==========
             self.logger.info(f"  分配输出数组...")
 
             corrected_data = np.zeros(
@@ -901,14 +1518,12 @@ class FunctionalProcessor:
                 dtype=np.float32
             )
 
-            # 对每个时间点进行配准
+            # ========== 5. 逐帧配准 ==========
             for i in range(n_timepoints):
                 if progress_callback:
                     progress_callback(10 + int(80 * i / n_timepoints), f"校正时间点 {i + 1}/{n_timepoints}...")
 
                 try:
-                    volume_img = None
-
                     volume_data = np.asarray(bold_dataobj[:, :, :, i]).astype(np.float32)
                     volume_img = ants.from_numpy(
                         volume_data,
@@ -929,6 +1544,7 @@ class FunctionalProcessor:
                             verbose=False
                         )
                         corrected_data[:, :, :, i] = reg['warpedmovout'].numpy()
+                        self._cleanup_ants_image(reg.get('warpedmovout'))
 
                     if volume_img is not None:
                         self._cleanup_ants_image(volume_img)
@@ -942,9 +1558,8 @@ class FunctionalProcessor:
                     volume_data = np.asarray(bold_dataobj[:, :, :, i]).astype(np.float32)
                     corrected_data[:, :, :, i] = volume_data
                     del volume_data
-                    gc.collect()
 
-            # 创建 NIfTI 图像
+            # ========== 6. 保存结果 ==========
             self.logger.info(f"  创建 NIfTI 图像...")
 
             output_img = nib.Nifti1Image(
@@ -956,6 +1571,13 @@ class FunctionalProcessor:
 
             nib.save(output_img, output_path)
 
+            # 验证输出方向
+            verify_nii = nib.load(output_path)
+            verify_orientation = ''.join(nib.orientations.aff2axcodes(verify_nii.affine))
+            self.logger.info(f"  输出方向：{verify_orientation}")
+            self.logger.info(f"  输出形状：{verify_nii.shape}")
+            self._close_nibabel_file(verify_nii)
+
             if progress_callback:
                 progress_callback(100, "运动校正完成")
 
@@ -965,7 +1587,8 @@ class FunctionalProcessor:
                 "success": True,
                 "output_path": output_path,
                 "n_timepoints": n_timepoints,
-                "reference_volume": reference_volume
+                "reference_volume": reference_volume,
+                "orientation": verify_orientation
             }
 
         except Exception as e:
@@ -973,22 +1596,23 @@ class FunctionalProcessor:
             raise
 
         finally:
-            # ← 关键：使用 locals() 检查变量是否存在
-            local_vars = locals()
+            # 清理临时文件
+            if bold_reoriented_path and os.path.exists(bold_reoriented_path):
+                try:
+                    os.remove(bold_reoriented_path)
+                    self.logger.info(f"  清理临时文件：{bold_reoriented_path}")
+                except:
+                    pass
 
-            if 'corrected_data' in local_vars and corrected_data is not None:
+            if corrected_data is not None:
                 del corrected_data
-
-            if 'output_img' in local_vars and output_img is not None:
+            if output_img is not None:
                 del output_img
-
-            if 'reference_img' in local_vars and reference_img is not None:
+            if reference_img is not None:
                 self._cleanup_ants_image(reference_img)
-
-            if 'volume_img' in local_vars and volume_img is not None:
+            if volume_img is not None:
                 self._cleanup_ants_image(volume_img)
-
-            if 'bold_nii' in local_vars and bold_nii is not None:
+            if bold_nii is not None:
                 self._close_nibabel_file(bold_nii)
 
             gc.collect()
@@ -1289,3 +1913,342 @@ class FunctionalProcessor:
             gc.collect()
 
         return results
+
+    # def _reorient_to_standard(self, nii_path: str, output_path: str,
+    #                           target_orientation: str = "RAS") -> str:
+    #     """
+    #     将 NIfTI 图像重定向到标准方向
+    #
+    #     Args:
+    #         nii_path: 输入文件路径
+    #         output_path: 输出文件路径
+    #         target_orientation: 目标方向 ("RAS", "LPI", 等)
+    #
+    #     Returns:
+    #         str: 输出文件路径
+    #     """
+    #     import nibabel as nib
+    #
+    #     self.logger.info(f"重定向图像：{nii_path}")
+    #     self.logger.info(f"  目标方向：{target_orientation}")
+    #
+    #     # 读取图像
+    #     nii = nib.load(nii_path)
+    #     data = nii.get_fdata()
+    #
+    #     # 获取当前方向
+    #     current_orientation = nib.orientations.aff2axcodes(nii.affine)
+    #     current_orientation_str = ''.join(current_orientation)
+    #
+    #     self.logger.info(f"  当前方向：{current_orientation_str}")
+    #
+    #     # 如果方向已经一致，直接复制
+    #     if current_orientation_str == target_orientation:
+    #         self.logger.info(f"  方向已一致，跳过重定向")
+    #         import shutil
+    #         shutil.copy(nii_path, output_path)
+    #         return output_path
+    #
+    #     # 重定向到目标方向
+    #     self.logger.info(f"  重定向：{current_orientation_str} → {target_orientation}")
+    #
+    #     # 方法 1：使用 nibabel 的 as_closest_canonical（推荐）
+    #     if target_orientation == "RAS":
+    #         reoriented_nii = nib.as_closest_canonical(nii)
+    #     else:
+    #         # 方法 2：手动重定向到任意方向
+    #         # 计算从当前方向到目标方向的变换
+    #         from nibabel import orientations
+    #
+    #         # 获取当前和目标的轴向编码
+    #         current_axcodes = nib.orientations.aff2axcodes(nii.affine)
+    #         target_axcodes = tuple(target_orientation)
+    #
+    #         # 计算重定向矩阵
+    #         ornt_current = orientations.axcodes2ornt(current_axcodes)
+    #         ornt_target = orientations.axcodes2ornt(target_axcodes)
+    #         transform = orientations.ornt_transform(ornt_current, ornt_target)
+    #
+    #         # 应用变换
+    #         reoriented_data = orientations.apply_orientation(data, transform)
+    #
+    #         # 计算新的 Affine
+    #         new_affine = nib.orientations.inv_ornt_aff(
+    #             transform,
+    #             data.shape
+    #         ) @ nii.affine
+    #
+    #         # 创建新 NIfTI
+    #         reoriented_nii = nib.Nifti1Image(
+    #             reoriented_data.astype(nii.get_data_dtype()),
+    #             new_affine,
+    #             header=nii.header
+    #         )
+    #
+    #     # 保存
+    #     nib.save(reoriented_nii, output_path)
+    #
+    #     # 验证
+    #     verify_nii = nib.load(output_path)
+    #     verify_orientation = ''.join(nib.orientations.aff2axcodes(verify_nii.affine))
+    #     self.logger.info(f"  验证方向：{verify_orientation}")
+    #
+    #     if verify_orientation != target_orientation:
+    #         self.logger.warning(f"  ⚠️ 重定向后方向仍为 {verify_orientation}")
+    #
+    #     self.logger.info(f"  ✅ 重定向完成")
+    #
+    #     return output_path
+
+    def _reorient_to_LIP(self, nii_path: str, output_path: str) -> str:
+        """
+        强制将图像方向统一为 LIP
+        通过修改 Affine 矩阵实现（不重采样数据）
+        """
+        import nibabel as nib
+
+        self.logger.info(f"统一方向到 LIP：{nii_path}")
+
+        nii = nib.load(nii_path)
+        data = nii.get_fdata()
+        original_affine = nii.affine.copy()
+
+        # 获取当前方向
+        current_orientation = ''.join(nib.orientations.aff2axcodes(original_affine))
+        self.logger.info(f"  当前方向：{current_orientation}")
+
+        # 如果已经是 LIP，直接复制
+        if current_orientation == "LIP":
+            self.logger.info(f"  已是 LIP 方向，跳过")
+            import shutil
+            shutil.copy(nii_path, output_path)
+            return output_path
+
+        # 获取体素大小
+        zooms = nii.header.get_zooms()[:3]
+        self.logger.info(f"  体素大小：{zooms}")
+
+        # ← 关键：构建 LIP 方向的 Affine
+        # LIP = Left(-X), Inferior(-Y), Posterior(-Z)
+        # 但具体符号取决于原始数据
+
+        # 方法：使用 nibabel 的 as_closest_canonical 然后转换
+        # 或者手动构建
+
+        # 简化方法：直接使用原始 Affine，但确保方向码是 LIP
+        from nibabel import orientations
+
+        # 获取当前方向矩阵
+        current_ornt = orientations.axcodes2ornt(current_orientation)
+        target_ornt = orientations.axcodes2ornt("LIP")
+
+        self.logger.info(f"  当前方向编码：{current_ornt}")
+        self.logger.info(f"  目标方向编码：{target_ornt}")
+
+        # 计算变换
+        transform = orientations.ornt_transform(current_ornt, target_ornt)
+        self.logger.info(f"  变换矩阵：\n{transform}")
+
+        # 应用变换到数据
+        reoriented_data = orientations.apply_orientation(data, transform)
+
+        # 计算新 Affine
+        new_affine = orientations.inv_ornt_aff(transform, data.shape) @ original_affine
+
+        self.logger.info(f"  新 Affine:\n{new_affine}")
+
+        # 验证新方向
+        new_orientation = ''.join(nib.orientations.aff2axcodes(new_affine))
+        self.logger.info(f"  新方向：{new_orientation}")
+
+        # 创建新 NIfTI
+        new_nii = nib.Nifti1Image(
+            reoriented_data.astype(np.float32),
+            new_affine,
+            header=nii.header
+        )
+        new_nii.header.set_data_dtype(np.float32)
+
+        # 保存
+        nib.save(new_nii, output_path)
+
+        # 验证
+        verify_nii = nib.load(output_path)
+        verify_orientation = ''.join(nib.orientations.aff2axcodes(verify_nii.affine))
+        self.logger.info(f"  验证方向：{verify_orientation}")
+        self._close_nibabel_file(verify_nii)
+
+        if verify_orientation != "LIP":
+            self.logger.warning(f"  ⚠️ 方向仍为 {verify_orientation}，非 LIP")
+
+        self.logger.info(f"  ✅ 方向统一完成")
+
+        return output_path
+
+    def _downsample_template(
+            self,
+            template_path: str,
+            target_resolution: float,
+            output_path: str,
+            progress_callback: Optional[Callable[[int, str], None]] = None
+    ) -> str:
+        """
+        对模板进行降采样，降低分辨率
+
+        Args:
+            template_path: 原始模板路径
+            target_resolution: 目标分辨率 (mm)
+            output_path: 输出路径
+            progress_callback: 进度回调
+
+        Returns:
+            str: 降采样后的模板路径
+        """
+        import nibabel as nib
+        from scipy.ndimage import zoom
+
+        self.logger.info(f"=== 模板降采样 ===")
+        self.logger.info(f"输入：{template_path}")
+        self.logger.info(f"输出：{output_path}")
+        self.logger.info(f"目标分辨率：{target_resolution}mm")
+
+        try:
+            if progress_callback:
+                progress_callback(0, "读取模板...")
+
+            # 读取原始模板
+            nii = nib.load(template_path)
+            data = np.asanyarray(nii.dataobj)
+            original_affine = nii.affine.copy()
+            original_zooms = nii.header.get_zooms()[:3]
+
+            self.logger.info(f"=== 原始模板信息 ===")
+            self.logger.info(f"  形状：{data.shape}")
+            self.logger.info(f"  分辨率：{original_zooms}")
+            self.logger.info(f"  方向：{''.join(nib.orientations.aff2axcodes(original_affine))}")
+
+            # 计算缩放因子
+            target_res = float(target_resolution)
+            scale_factors = tuple(float(z) / target_res for z in original_zooms)
+
+            self.logger.info(f"=== 降采样计算 ===")
+            self.logger.info(f"  目标分辨率：{target_res}mm")
+            self.logger.info(f"  缩放因子：{scale_factors}")
+
+            expected_shape = tuple(int(s * f) for s, f in zip(data.shape[:3], scale_factors))
+            self.logger.info(f"  预期输出形状：{expected_shape}")
+
+            # 估算输出文件大小
+            estimated_size_gb = (np.prod(expected_shape) * 4) / (1024 ** 3)
+            self.logger.info(f"  预估文件大小：{estimated_size_gb:.2f} GB")
+
+            if progress_callback:
+                progress_callback(20, "执行降采样...")
+
+            # 降采样（线性插值）
+            resampled_data = zoom(data, scale_factors, order=1)
+
+            self.logger.info(f"=== 降采样结果 ===")
+            self.logger.info(f"  实际输出形状：{resampled_data.shape}")
+
+            # 构建新的正交 Affine
+            translation = original_affine[:3, 3].copy()
+
+            # 提取并正交化旋转矩阵
+            rotation = original_affine[:3, :3].copy()
+            for i in range(3):
+                norm = np.linalg.norm(rotation[:, i])
+                if norm > 1e-10:
+                    rotation[:, i] /= norm
+
+            # SVD 正交化
+            U, S, Vt = np.linalg.svd(rotation)
+            rotation = np.dot(U, Vt)
+
+            # 构建新 Affine
+            new_zoom_matrix = np.diag([target_res, target_res, target_res])
+            new_affine = np.eye(4)
+            new_affine[:3, :3] = np.dot(rotation, new_zoom_matrix)
+            new_affine[:3, 3] = translation
+
+            self.logger.info(f"  新 Affine:\n{new_affine}")
+
+            # 验证正交性
+            new_direction = new_affine[:3, :3].copy()
+            for i in range(3):
+                norm = np.linalg.norm(new_direction[:, i])
+                if norm > 1e-10:
+                    new_direction[:, i] /= norm
+            ortho_check = np.dot(new_direction.T, new_direction)
+
+            if not np.allclose(ortho_check, np.eye(3), atol=1e-3):
+                self.logger.error(f"  ❌ 正交性验证失败！")
+                raise ValueError("方向矩阵不是正交的")
+
+            self.logger.info(f"  ✅ 正交性验证通过")
+
+            if progress_callback:
+                progress_callback(80, "保存降采样模板...")
+
+            # 创建新 NIfTI
+            new_header = nib.Nifti1Header()
+            new_header.set_data_dtype(np.float32)
+
+            new_nii = nib.Nifti1Image(
+                resampled_data.astype(np.float32),
+                new_affine,
+                header=new_header
+            )
+
+            # 保存
+            nib.save(new_nii, output_path)
+
+            # ← 关键修复：在关闭文件前获取验证信息
+            self.logger.info(f"=== 输出验证 ===")
+
+            # 先获取所有需要的信息
+            verify_shape = new_nii.shape  # ← 直接从新创建的图像获取
+            verify_zooms = tuple(float(new_header['pixdim'][i]) for i in range(1, 4))
+            verify_dtype = new_nii.get_data_dtype()
+            verify_data = resampled_data  # ← 使用已有的数据
+
+            self.logger.info(f"  形状：{verify_shape}")
+            self.logger.info(f"  分辨率：{verify_zooms}")
+            self.logger.info(f"  方向：{''.join(nib.orientations.aff2axcodes(new_affine))}")
+            self.logger.info(f"  数据类型：{verify_dtype}")
+            self.logger.info(f"  数据范围：{verify_data.min():.2f} - {verify_data.max():.2f}")
+
+            # ← 关键：现在可以安全关闭了（其实不需要关闭，因为是我们刚创建的）
+            # 如果一定要验证文件，重新加载但立即获取信息后关闭
+            try:
+                verify_loaded = nib.load(output_path)
+                verify_loaded_shape = verify_loaded.shape
+                verify_loaded_zooms = verify_loaded.header.get_zooms()[:3]
+                verify_loaded_orientation = ''.join(nib.orientations.aff2axcodes(verify_loaded.affine))
+
+                self.logger.info(
+                    f"  文件验证 - 形状：{verify_loaded_shape}, 分辨率：{verify_loaded_zooms}, 方向：{verify_loaded_orientation}")
+
+                # ← 关键：立即关闭，不再访问任何属性
+                self._close_nibabel_file(verify_loaded)
+            except Exception as e:
+                self.logger.warning(f"  文件验证跳过：{e}")
+
+            if progress_callback:
+                progress_callback(100, "模板降采样完成")
+
+            self.logger.info(f"=== 模板降采样完成 ===")
+            self.logger.info(f"  原始大小：{np.prod(data.shape) * 4 / (1024 ** 3):.2f} GB")
+            self.logger.info(f"  降采样后：{estimated_size_gb:.2f} GB")
+
+            # ← 关键修复：使用本地变量计算压缩比，不访问已关闭的对象
+            original_voxels = np.prod(data.shape)
+            downsampled_voxels = np.prod(verify_shape)
+            compression_ratio = original_voxels / downsampled_voxels if downsampled_voxels > 0 else 0
+            self.logger.info(f"  压缩比：{compression_ratio:.1f}x")
+
+            return output_path
+
+        except Exception as e:
+            self.logger.error(f"❌ 降采样失败：{e}", exc_info=True)
+            raise

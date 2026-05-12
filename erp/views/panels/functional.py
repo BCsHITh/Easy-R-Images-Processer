@@ -1,5 +1,5 @@
 """
-功能像处理面板（支持文件管理器联动）
+功能像处理面板（完整修复版）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox,
@@ -27,7 +27,6 @@ class FunctionalWorker(QThread):
         try:
             from erp.core.functional import FunctionalProcessor
 
-            # 创建处理器（带配置）
             processor = FunctionalProcessor()
 
             result = processor.process_functional(
@@ -58,7 +57,7 @@ class FunctionalPanel(BasePanel):
         super().__init__("4. 功能像处理", parent, with_preview)
 
     def _create_tool_panel(self):
-        """创建工具面板（带滚动区域）"""
+        """创建工具面板（完整修复版）"""
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -74,35 +73,6 @@ class FunctionalPanel(BasePanel):
         layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(8)
-        # ========== 0. 处理模式选择 ==========
-        mode_group = QGroupBox("⚙️ 处理模式")
-        mode_layout = QHBoxLayout()
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("🚀 快速模式 (3mm)", "fast")
-        self.mode_combo.addItem("⚖️ 标准模式 (2mm)", "standard")
-        self.mode_combo.addItem("🔬 高质量 (1mm)", "high")
-        self.mode_combo.setCurrentIndex(0)  # 默认快速模式
-        self.mode_combo.setToolTip("快速模式：内存占用低，速度快\n标准模式：平衡质量和速度\n高质量：最高分辨率，内存需求高")
-        self.mode_combo.setMinimumWidth(200)
-        mode_layout.addWidget(QLabel("模式:"))
-        mode_layout.addWidget(self.mode_combo)
-
-        # 自定义分辨率
-        self.resolution_check = QCheckBox("自定义分辨率:")
-        self.resolution_spin = QDoubleSpinBox()
-        self.resolution_spin.setRange(0.5, 10.0)
-        self.resolution_spin.setValue(3.0)
-        self.resolution_spin.setSingleStep(0.5)
-        self.resolution_spin.setSuffix(" mm")
-        self.resolution_spin.setEnabled(False)
-        self.resolution_check.toggled.connect(self.resolution_spin.setEnabled)
-
-        mode_layout.addWidget(self.resolution_check)
-        mode_layout.addWidget(self.resolution_spin)
-        mode_layout.addStretch()
-        mode_group.setLayout(mode_layout)
-        layout.addWidget(mode_group)
 
         # ========== 1. BOLD 文件选择 ==========
         bold_group = QGroupBox("📁 BOLD 序列文件（4D）")
@@ -151,6 +121,12 @@ class FunctionalPanel(BasePanel):
         template_group.setLayout(template_layout)
         layout.addWidget(template_group)
 
+        # ← 新增：模板信息标签
+        self.template_info_label = QLabel("模板信息：未选择")
+        self.template_info_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.template_info_label.setWordWrap(True)
+        layout.addWidget(self.template_info_label)
+
         # ========== 4. 输出目录 ==========
         output_group = QGroupBox("📂 输出目录")
         output_layout = QHBoxLayout()
@@ -166,7 +142,38 @@ class FunctionalPanel(BasePanel):
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
-        # ========== 5. 处理流程 ==========
+        # ========== 5. 处理模式/分辨率选择 ==========
+        mode_group = QGroupBox("⚙️ 处理模式")
+        mode_layout = QHBoxLayout()
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("🚀 快速模式 (0.5mm)", "0.5")
+        self.mode_combo.addItem("⚖️ 标准模式 (0.3mm)", "0.3")
+        self.mode_combo.addItem("🔬 高质量 (0.2mm)", "0.2")
+        self.mode_combo.addItem("📐 自定义", "custom")
+        self.mode_combo.setCurrentIndex(0)
+        self.mode_combo.setToolTip("快速模式：内存占用低，速度快\n标准模式：平衡质量和速度\n高质量：最高分辨率，内存需求高")
+        self.mode_combo.setMinimumWidth(180)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+
+        mode_layout.addWidget(QLabel("目标分辨率:"))
+        mode_layout.addWidget(self.mode_combo)
+
+        # ← 关键修复：创建 resolution_spin
+        self.resolution_spin = QDoubleSpinBox()
+        self.resolution_spin.setRange(0.1, 5.0)
+        self.resolution_spin.setValue(0.5)
+        self.resolution_spin.setSingleStep(0.1)
+        self.resolution_spin.setSuffix(" mm")
+        self.resolution_spin.setEnabled(False)
+        self.resolution_spin.setMinimumWidth(100)
+        mode_layout.addWidget(self.resolution_spin)
+
+        mode_layout.addStretch()
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        # ========== 6. 处理流程 ==========
         process_group = QGroupBox("⚙️ 处理流程")
         process_layout = QVBoxLayout()
         process_layout.setSpacing(5)
@@ -190,7 +197,7 @@ class FunctionalPanel(BasePanel):
         process_group.setLayout(process_layout)
         layout.addWidget(process_group)
 
-        # ========== 6. 进度 ==========
+        # ========== 7. 进度 ==========
         progress_group = QGroupBox("📊 进度")
         progress_layout = QVBoxLayout()
 
@@ -206,7 +213,7 @@ class FunctionalPanel(BasePanel):
         progress_group.setLayout(progress_layout)
         layout.addWidget(progress_group)
 
-        # ========== 7. 执行按钮 ==========
+        # ========== 8. 执行按钮 ==========
         self.run_btn = QPushButton("▶ 开始处理")
         self.run_btn.setFixedHeight(45)
         self.run_btn.clicked.connect(self._start_processing)
@@ -233,6 +240,13 @@ class FunctionalPanel(BasePanel):
 
         return scroll_area
 
+    def _on_mode_changed(self, text):
+        """模式变化时启用/禁用自定义输入"""
+        if text == "📐 自定义":
+            self.resolution_spin.setEnabled(True)
+        else:
+            self.resolution_spin.setEnabled(False)
+
     def _select_file(self, line_edit, file_type):
         """选择文件"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -240,6 +254,25 @@ class FunctionalPanel(BasePanel):
         )
         if file_path:
             line_edit.setText(file_path)
+
+            # ← 新增：如果是模板文件，显示信息
+            if file_type == "模板":
+                try:
+                    import nibabel as nib
+                    import numpy as np
+                    nii = nib.load(file_path)
+                    zooms = nii.header.get_zooms()[:3]
+                    shape = nii.shape[:3]
+                    min_zoom = min(zooms)
+
+                    size_gb = np.prod(shape) * 4 / (1024**3)
+
+                    self.template_info_label.setText(
+                        f"模板信息：形状{shape}, 分辨率{zooms}, 大小{size_gb:.2f}GB\n"
+                        f"{'⚠️ 分辨率过高，将自动降采样' if min_zoom < 0.5 else '✅ 分辨率合适'}"
+                    )
+                except Exception as e:
+                    self.template_info_label.setText(f"模板信息：无法读取 - {e}")
 
     def _select_output_dir(self):
         """选择输出目录"""
@@ -262,16 +295,35 @@ class FunctionalPanel(BasePanel):
         t1w_path = self.t1w_edit.text().strip()
         output_dir = self.output_edit.text().strip()
 
-        # ... 验证代码不变 ...
+        if not bold_path:
+            QMessageBox.warning(self, "警告", "请选择 BOLD 序列文件")
+            return
 
-        # 获取处理模式
-        processing_mode = self.mode_combo.currentData()
+        if not t1w_path:
+            QMessageBox.warning(self, "警告", "请选择 T1w 结构像参考")
+            return
 
-        # 获取自定义分辨率
-        if self.resolution_check.isChecked():
+        if not output_dir:
+            QMessageBox.warning(self, "警告", "请选择输出目录")
+            return
+
+        # 检查 ANTsPy
+        try:
+            from erp.core.functional import FunctionalProcessor
+            self.processor = FunctionalProcessor()
+        except ImportError as e:
+            QMessageBox.critical(self, "错误", str(e))
+            return
+
+        # ← 关键修复：获取分辨率设置
+        mode_text = self.mode_combo.currentText()
+        if mode_text == "📐 自定义":
             target_resolution = self.resolution_spin.value()
+            processing_mode = "custom"
         else:
-            target_resolution = None
+            # 从 combo box 的 data 获取分辨率
+            target_resolution = float(self.mode_combo.currentData())
+            processing_mode = "auto"
 
         # 准备参数
         params = {
@@ -299,6 +351,7 @@ class FunctionalPanel(BasePanel):
         self.current_worker.start()
 
         self.log(f"开始功能像处理：{Path(bold_path).name}")
+        self.log(f"目标分辨率：{target_resolution}mm")
 
     def _on_progress(self, value, text):
         self.progress_bar.setValue(value)
@@ -319,9 +372,9 @@ class FunctionalPanel(BasePanel):
                     self.log(f"  {step}: {path}")
 
             # 自动加载结果到预览
-            if "bold_mean" in outputs:
+            if "bold_in_template" in outputs:
                 if hasattr(self, 'image_viewer'):
-                    self.image_viewer.load_image(outputs["bold_mean"], "BOLD 平均图像")
+                    self.image_viewer.load_image(outputs["bold_in_template"], "模板空间 BOLD")
 
             QMessageBox.information(
                 self,
