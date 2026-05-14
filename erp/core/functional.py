@@ -205,7 +205,7 @@ class FunctionalProcessor:
         template_nii = None
         template = None
         transformed_mm = None
-        temp_output_path = None
+        temp_output_path = None  # ← 在 try 外初始化
         volume_img = None
         transformed_img = None
 
@@ -280,7 +280,7 @@ class FunctionalProcessor:
             # 获取几何信息（提前获取，避免重复访问）
             origin_3d = list(bold_nii.header.get_best_affine()[:3, 3])
             spacing_3d = list(bold_nii.header.get_zooms()[:3])
-            direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)
+            direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)  # ← 使用修复后的函数
 
             # ========== 4. 验证并构建变换链 ==========
             transform_files = []
@@ -382,7 +382,7 @@ class FunctionalProcessor:
             self.logger.info(f"  ✅ 流式写入完成")
 
             # ========== 7. 写入 NIfTI 头信息 ==========
-            self.logger.info(f"  写入 NIfTI 头信息... ")
+            self.logger.info(f"  写入 NIfTI 头信息...")
 
             output_header = nib.Nifti1Header()
             output_header.set_data_dtype(np.float32)
@@ -413,14 +413,6 @@ class FunctionalProcessor:
             readonly_mm = None
             gc.collect()
 
-            # 清理临时 memmap 文件
-            if temp_output_path and os.path.exists(temp_output_path):
-                try:
-                    os.remove(temp_output_path)
-                    self.logger.info(f"  清理临时文件：{temp_output_path}")
-                except Exception as e:
-                    self.logger.warning(f"  清理临时文件失败：{e}")
-
             if progress_callback:
                 progress_callback(100, "变换应用完成")
 
@@ -439,12 +431,17 @@ class FunctionalProcessor:
         finally:
             self.logger.info("  清理资源...")
 
+            # ← 统一清理：确保 flush 在 del 之前
             if transformed_mm is not None:
                 try:
                     transformed_mm.flush()
+                except:
+                    pass
+                try:
                     del transformed_mm
                 except:
                     pass
+                transformed_mm = None
 
             if template is not None:
                 self._cleanup_ants_image(template)
@@ -462,16 +459,17 @@ class FunctionalProcessor:
                 self._cleanup_ants_image(transformed_img)
                 transformed_img = None
 
-            # 确保清理临时文件
+            # ← 统一清理临时文件（在 finally 中确保执行）
             if temp_output_path and os.path.exists(temp_output_path):
                 try:
                     os.remove(temp_output_path)
-                    self.logger.info(f"  清理残留临时文件：{temp_output_path}")
-                except:
-                    pass
+                    self.logger.info(f"  清理临时文件：{temp_output_path}")
+                except Exception as e:
+                    self.logger.warning(f"  清理临时文件失败：{e}")
 
             gc.collect()
             self.logger.info("  资源清理完成")
+
 
     def motion_correction(
             self,
@@ -490,7 +488,7 @@ class FunctionalProcessor:
         reference_img = None
         volume_img = None
         corrected_mm = None
-        temp_output_path = None
+        temp_output_path = None  # ← 在 try 外初始化
         volume_data = None
 
         try:
@@ -508,7 +506,7 @@ class FunctionalProcessor:
             # 获取几何信息
             origin_3d = list(bold_nii.header.get_best_affine()[:3, 3])
             spacing_3d = list(bold_nii.header.get_zooms()[:3])
-            direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)
+            direction_3d = self._get_direction_3x3_from_nibabel(bold_nii)  # ← 使用修复后的函数
 
             # ========== 2. 提取参考体积 ==========
             if progress_callback:
@@ -628,20 +626,6 @@ class FunctionalProcessor:
             readonly_mm = None
             gc.collect()
 
-            # 清理临时 memmap 文件
-            if temp_output_path and os.path.exists(temp_output_path):
-                try:
-                    os.remove(temp_output_path)
-                    self.logger.info(f"  清理临时文件：{temp_output_path}")
-                except Exception as e:
-                    self.logger.warning(f"  清理临时文件失败：{e}")
-
-            verify_nii = nib.load(output_path)
-            verify_orientation = ''.join(nib.orientations.aff2axcodes(verify_nii.affine))
-            self.logger.info(f"  输出方向：{verify_orientation}")
-            self.logger.info(f"  输出形状：{verify_nii.shape}")
-            self._close_nibabel_file(verify_nii)
-
             if progress_callback:
                 progress_callback(100, "运动校正完成")
 
@@ -652,7 +636,7 @@ class FunctionalProcessor:
                 "output_path": output_path,
                 "n_timepoints": n_timepoints,
                 "reference_volume": reference_volume,
-                "orientation": verify_orientation
+                "orientation": ''.join(nib.orientations.aff2axcodes(output_affine))
             }
 
         except Exception as e:
@@ -660,17 +644,23 @@ class FunctionalProcessor:
             raise
 
         finally:
+            # ← 统一清理：确保 flush 在 del 之前
             if corrected_mm is not None:
                 try:
                     corrected_mm.flush()
+                except:
+                    pass
+                try:
                     del corrected_mm
                 except:
                     pass
+                corrected_mm = None
 
+            # ← 统一清理临时文件
             if temp_output_path and os.path.exists(temp_output_path):
                 try:
                     os.remove(temp_output_path)
-                    self.logger.info(f"  清理残留临时文件：{temp_output_path}")
+                    self.logger.info(f"  清理临时文件：{temp_output_path}")
                 except:
                     pass
 
