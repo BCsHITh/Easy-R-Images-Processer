@@ -1,5 +1,5 @@
 """
-功能像处理面板（完整修复版）
+功能像处理面板（最小化修改版）
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QCheckBox,
@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from pathlib import Path
-
 from erp.views.panels.base_panel import BasePanel
 
 
@@ -40,6 +39,7 @@ class FunctionalWorker(QThread):
                 do_bold_mean=self.params.get('do_bold_mean', True),
                 do_bold_to_t1=self.params.get('do_bold_to_t1', True),
                 do_map_to_template=self.params.get('do_map_to_template', True),
+                t1_to_template_transforms=self.params.get('t1_to_template_transforms'),  # ← 新增
                 progress_callback=lambda v, t: self.progress.emit(v, t)
             )
             self.finished.emit(result)
@@ -54,10 +54,12 @@ class FunctionalPanel(BasePanel):
         self.config = config
         self.processor = None
         self.current_worker = None
+        # ← 新增：存储外部传入的 T1->模板变换文件
+        self.t1_to_template_transforms = None
         super().__init__("4. 功能像处理", parent, with_preview)
 
     def _create_tool_panel(self):
-        """创建工具面板（完整修复版）"""
+        """创建工具面板（保持原样）"""
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -121,7 +123,7 @@ class FunctionalPanel(BasePanel):
         template_group.setLayout(template_layout)
         layout.addWidget(template_group)
 
-        # ← 新增：模板信息标签
+        # ← 修改：移除分辨率警告，仅显示基本信息
         self.template_info_label = QLabel("模板信息：未选择")
         self.template_info_label.setStyleSheet("color: #888; font-size: 10px;")
         self.template_info_label.setWordWrap(True)
@@ -159,7 +161,6 @@ class FunctionalPanel(BasePanel):
         mode_layout.addWidget(QLabel("目标分辨率:"))
         mode_layout.addWidget(self.mode_combo)
 
-        # ← 关键修复：创建 resolution_spin
         self.resolution_spin = QDoubleSpinBox()
         self.resolution_spin.setRange(0.1, 5.0)
         self.resolution_spin.setValue(0.5)
@@ -223,7 +224,7 @@ class FunctionalPanel(BasePanel):
                 color: white;
                 font-size: 14px;
                 font-weight: bold;
-                border-radius: 5px;
+                border-radius: 5px; 
             }
             QPushButton:hover {
                 background-color: #3a8eef;
@@ -255,7 +256,7 @@ class FunctionalPanel(BasePanel):
         if file_path:
             line_edit.setText(file_path)
 
-            # ← 新增：如果是模板文件，显示信息
+            # ← 修改：简化模板信息显示（移除分辨率警告）
             if file_type == "模板":
                 try:
                     import nibabel as nib
@@ -263,13 +264,12 @@ class FunctionalPanel(BasePanel):
                     nii = nib.load(file_path)
                     zooms = nii.header.get_zooms()[:3]
                     shape = nii.shape[:3]
-                    min_zoom = min(zooms)
 
                     size_gb = np.prod(shape) * 4 / (1024**3)
 
+                    # ← 移除分辨率警告，仅显示基本信息
                     self.template_info_label.setText(
-                        f"模板信息：形状{shape}, 分辨率{zooms}, 大小{size_gb:.2f}GB\n"
-                        f"{'⚠️ 分辨率过高，将自动降采样' if min_zoom < 0.5 else '✅ 分辨率合适'}"
+                        f"模板信息：形状{shape}, 分辨率{zooms}, 大小{size_gb:.2f}GB"
                     )
                 except Exception as e:
                     self.template_info_label.setText(f"模板信息：无法读取 - {e}")
@@ -288,6 +288,22 @@ class FunctionalPanel(BasePanel):
         elif file_type == "T1w":
             self.t1w_edit.setText(file_path)
             self.log(f"已设置 T1w 参考：{file_path}")
+
+    # ← 新增：接收外部结构像配准生成的变换文件
+    def set_t1_to_template_transforms(self, transform_files: list):
+        """
+        设置 T1->模板的变换文件（由结构像配准面板传入）
+
+        Args:
+            transform_files: 变换文件列表，如 ['/path/affine.mat', '/path/warp.nii.gz']
+        """
+        self.t1_to_template_transforms = transform_files
+        if transform_files:
+            self.log(f"✅ 已接收 T1->模板变换文件：{len(transform_files)} 个")
+            for tf in transform_files:
+                self.log(f"  - {Path(tf).name}")
+        else:
+            self.log("⚠️ 未提供 T1->模板变换文件，将仅执行 BOLD->T1 配准")
 
     def _start_processing(self):
         """开始处理"""
@@ -315,7 +331,7 @@ class FunctionalPanel(BasePanel):
             QMessageBox.critical(self, "错误", str(e))
             return
 
-        # ← 关键修复：获取分辨率设置
+        # 获取分辨率设置
         mode_text = self.mode_combo.currentText()
         if mode_text == "📐 自定义":
             target_resolution = self.resolution_spin.value()
@@ -336,7 +352,8 @@ class FunctionalPanel(BasePanel):
             'do_motion_correction': self.motion_check.isChecked(),
             'do_bold_mean': self.mean_check.isChecked(),
             'do_bold_to_t1': self.reg_check.isChecked(),
-            'do_map_to_template': self.template_check.isChecked()
+            'do_map_to_template': self.template_check.isChecked(),
+            't1_to_template_transforms': self.t1_to_template_transforms  # ← 确保有此字段
         }
 
         # 禁用按钮
@@ -352,6 +369,8 @@ class FunctionalPanel(BasePanel):
 
         self.log(f"开始功能像处理：{Path(bold_path).name}")
         self.log(f"目标分辨率：{target_resolution}mm")
+        if self.t1_to_template_transforms:
+            self.log(f"使用外部 T1->模板变换：{len(self.t1_to_template_transforms)} 个文件")
 
     def _on_progress(self, value, text):
         self.progress_bar.setValue(value)
