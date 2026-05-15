@@ -87,7 +87,31 @@ class FunctionalProcessor:
         for i in range(3):
             if zooms[i] > 1e-10:
                 rotation[:, i] /= zooms[i]
+
+        # 修改：SVD 正交化方向矩阵，消除拉伸
+        U, _, Vt = np.linalg.svd(rotation)
+        rotation = np.dot(U, Vt)
+
         return rotation
+    # def _get_direction_3x3_from_nibabel(self, nii):
+    #     """从 nibabel NIfTI 提取 3x3 方向矩阵（保持正交并恢复 voxel size）"""
+    #     affine = nii.affine
+    #     zooms = np.array(nii.header.get_zooms()[:3], dtype=np.float64)  # ← 确保是 ndarray
+    #     rotation = affine[:3, :3].copy()
+    #
+    #     # 用 zooms 归一化
+    #     for i in range(3):
+    #         if zooms[i] > 1e-10:
+    #             rotation[:, i] /= zooms[i]
+    #
+    #     # SVD 正交化方向矩阵
+    #     U, _, Vt = np.linalg.svd(rotation)
+    #     rotation = np.dot(U, Vt)
+    #
+    #     # 乘回 voxel size，保证列向量长度与实际 spacing 一致
+    #     rotation = rotation * zooms[np.newaxis, :]  # (1,3) 和 (3,3) 列对应
+    #
+    #     return rotation
 
     def _resample_template(
             self,
